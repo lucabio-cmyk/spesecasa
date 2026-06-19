@@ -10,9 +10,11 @@ COPY pyproject.toml ./
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
+COPY entrypoint.sh ./
 
 RUN pip install --upgrade pip && pip install .
+RUN chmod +x ./entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["./entrypoint.sh"]

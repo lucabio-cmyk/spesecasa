@@ -74,8 +74,13 @@ Docs interattive: http://localhost:8000/docs
    gestito comunque dalla migrazione iniziale).
 3. Aggiungi un **Volume** persistente montato sul path di `STORAGE_DIR`
    (default `/data/documents`).
-4. Variabili d'ambiente: `ANTHROPIC_API_KEY`, `JWT_SECRET` (e opzionali per la
-   ricerca semantica). `DATABASE_URL` è fornito da Railway.
+4. Variabili d'ambiente: `ANTHROPIC_API_KEY`, `JWT_SECRET`, `APP_ENV=production`
+   (e opzionali per la ricerca semantica). **Collega esplicitamente il database**:
+   aggiungi al servizio dell'app la variabile
+   `DATABASE_URL=${{Postgres.DATABASE_URL}}` (in alternativa l'app sa ricostruire
+   l'URL dalle variabili `PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE`). Senza
+   questa configurazione l'app fallisce all'avvio con un messaggio esplicito
+   invece di tentare una connessione a `localhost`.
 5. Lo start command esegue `alembic upgrade head` e poi avvia Uvicorn.
 
 Vedi `CLAUDE.md` per il brief di sviluppo e il backlog.

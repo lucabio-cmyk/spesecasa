@@ -1,13 +1,75 @@
+import os
 from functools import lru_cache
+from urllib.parse import (
+    parse_qsl,
+    quote_plus,
+    urlencode,
+    urlsplit,
+    urlunsplit,
+)
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Default usato solo in locale: in deploy DEVE essere sovrascritto da DATABASE_URL
+# (o dalle variabili PG* del servizio Postgres).
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/spese"
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
+
+
+def _database_url_from_pg_env() -> str | None:
+    """Costruisce l'URL dalle variabili componente standard di Postgres.
+
+    Railway (e l'immagine ufficiale Postgres) espongono PGHOST/PGPORT/PGUSER/
+    PGPASSWORD/PGDATABASE: se DATABASE_URL non è impostato ma queste ci sono,
+    usiamole invece di ripiegare ciecamente su localhost.
+    """
+    host = os.getenv("PGHOST")
+    if not host:
+        return None
+    user = os.getenv("PGUSER", "postgres")
+    password = os.getenv("PGPASSWORD", "")
+    port = os.getenv("PGPORT", "5432")
+    name = os.getenv("PGDATABASE", "postgres")
+    cred = quote_plus(user)
+    if password:
+        cred = f"{cred}:{quote_plus(password)}"
+    return f"postgresql+asyncpg://{cred}@{host}:{port}/{name}"
+
+
+def _normalize_async_url(url: str) -> str:
+    """Forza il driver asyncpg e ripulisce i parametri non supportati.
+
+    - Railway fornisce schemi `postgresql://` / `postgres://`: li mappiamo su
+      `postgresql+asyncpg://`.
+    - asyncpg non accetta il parametro libpq `sslmode` come kwarg di connessione
+      (lo riceve via SQLAlchemy e solleva TypeError): lo traduciamo nel parametro
+      `ssl`, che asyncpg interpreta con gli stessi valori (require, verify-full…).
+    """
+    for prefix in ("postgresql+asyncpg://", "postgresql://", "postgres://"):
+        if url.startswith(prefix):
+            url = "postgresql+asyncpg://" + url[len(prefix):]
+            break
+
+    parts = urlsplit(url)
+    if parts.query:
+        params = parse_qsl(parts.query, keep_blank_values=True)
+        rebuilt: list[tuple[str, str]] = []
+        for key, value in params:
+            if key.lower() == "sslmode":
+                # Evita parametri duplicati se sono presenti sia sslmode sia ssl.
+                if not any(k.lower() == "ssl" for k, _ in params):
+                    rebuilt.append(("ssl", value))
+                continue
+            rebuilt.append((key, value))
+        url = urlunsplit(parts._replace(query=urlencode(rebuilt)))
+    return url
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/spese"
+    database_url: str = DEFAULT_DATABASE_URL
 
     # Anthropic
     anthropic_api_key: str = ""
@@ -40,16 +102,31 @@ class Settings(BaseSettings):
     app_env: str = "development"
     cors_origins: str = "*"
 
+    def _resolve_database_url(self) -> str:
+        """URL effettivo (normalizzato asyncpg), con fallback alle PG*.
+
+        Precedenza: DATABASE_URL esplicito → variabili PG* → default locale.
+        """
+        url = self.database_url
+        if url == DEFAULT_DATABASE_URL:
+            assembled = _database_url_from_pg_env()
+            if assembled:
+                url = assembled
+        return _normalize_async_url(url)
+
     @property
     def async_database_url(self) -> str:
-        """Railway fornisce postgresql://; lo forziamo al driver asyncpg."""
-        url = self.database_url
-        if url.startswith("postgresql+asyncpg://"):
-            return url
-        if url.startswith("postgresql://"):
-            return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        if url.startswith("postgres://"):
-            return url.replace("postgres://", "postgresql+asyncpg://", 1)
+        url = self._resolve_database_url()
+        host = urlsplit(url).hostname or ""
+        if host in _LOCAL_HOSTS and self.app_env != "development":
+            raise RuntimeError(
+                "Database non configurato: l'applicazione sta puntando al "
+                f"Postgres locale di default (host '{host or 'localhost'}') in "
+                f"ambiente '{self.app_env}'. Imposta DATABASE_URL — su Railway "
+                "collega il servizio Postgres, es. "
+                "DATABASE_URL=${{Postgres.DATABASE_URL}} — oppure fornisci le "
+                "variabili PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE."
+            )
         return url
 
     @property
