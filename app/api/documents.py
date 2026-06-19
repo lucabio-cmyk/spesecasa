@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
 from sqlalchemy import select
@@ -33,16 +33,19 @@ async def upload_document(
     user: CurrentUser,
     db: DB,
     bg: BackgroundTasks,
+    response: Response,
     file: UploadFile = File(...),
     note: str | None = Form(None),
 ):
     """Carica un documento (scontrino/fattura/...). Salva il file e avvia in
-    background l'elaborazione dell'agente."""
+    background l'elaborazione dell'agente.
+
+    Verifica anti-duplicazione: se lo stesso file (identico hash) è già presente
+    nell'archivio del nucleo, NON viene ricaricato; si risponde 200 con il
+    documento esistente e l'header `X-Document-Duplicate: 1`."""
     data = await file.read()
     digest = file_hash(data)
 
-    # Anti-duplicazione: se lo stesso file è già stato caricato nel nucleo,
-    # restituiamo il documento esistente invece di ricrearlo.
     dup = await db.execute(
         select(Document).where(
             Document.household_id == user.household_id,
@@ -51,6 +54,8 @@ async def upload_document(
     )
     existing = dup.scalars().first()
     if existing:
+        response.status_code = status.HTTP_200_OK
+        response.headers["X-Document-Duplicate"] = "1"
         return existing
 
     rel = f"{user.household_id}/{datetime.utcnow():%Y}/{digest[:16]}_{file.filename}"

@@ -412,8 +412,20 @@ async function handleFiles(files) {
     list.prepend(row);
     try {
       const fd = new FormData(); fd.append("file", file);
-      const doc = await api("/documents", { method: "POST", body: fd, isForm: true });
+      const res = await api("/documents", { method: "POST", body: fd, isForm: true, raw: true });
+      const doc = await res.json();
       row.querySelector(".progress i").style.width = "100%";
+      // Verifica anti-duplicazione: il server risponde 200 (+ header) se il
+      // file è identico a uno già in archivio.
+      const isDuplicate = res.status === 200 || res.headers.get("X-Document-Duplicate") === "1";
+      if (isDuplicate) {
+        row.querySelector(".progress i").style.background = "var(--amber-500)";
+        row.querySelector(".status").innerHTML = `<span class="badge b-da_verificare">Già presente</span>`;
+        const m = row.querySelector(".meta");
+        m.insertAdjacentHTML("beforeend", `<div class="hint" style="margin-top:5px">📎 Documento già in archivio (${esc(DOCTYPE_LABELS[doc.doc_type] || doc.doc_type)}${doc.issuer ? " · " + esc(doc.issuer) : ""}). Non è stato ricaricato.</div>`);
+        toast("Documento già presente", { desc: "Questo file è già nell'archivio: caricamento ignorato.", type: "warn" });
+        continue;
+      }
       row.querySelector(".status").innerHTML = badge(doc.status, STATUS_LABELS);
       pollDocument(doc.id, row);
     } catch (err) {
