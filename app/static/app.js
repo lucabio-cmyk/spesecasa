@@ -777,7 +777,8 @@ async function downloadAuthed(url, filename) {
     const res = await api(url, { raw: true });
     const blob = await res.blob();
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    a.href = URL.createObjectURL(blob); a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(a.href);
   } catch (e) { toast("Export non riuscito", { desc: e.message, type: "err" }); }
 }

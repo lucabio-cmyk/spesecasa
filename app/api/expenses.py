@@ -48,7 +48,9 @@ async def update_expense(expense_id: uuid.UUID, body: ExpenseUpdate, user: Curre
     expense = await db.get(Expense, expense_id)
     if not expense or expense.household_id != user.household_id:
         raise HTTPException(404, "Spesa non trovata")
-    for key, value in body.model_dump(exclude_none=True).items():
+    # exclude_unset: aggiorna solo i campi inviati, consentendo di azzerare
+    # esplicitamente a null campi opzionali (es. payer/beneficiary).
+    for key, value in body.model_dump(exclude_unset=True).items():
         setattr(expense, key, value)
     await db.commit()
     await db.refresh(expense)

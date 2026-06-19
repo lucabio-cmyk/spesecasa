@@ -231,6 +231,8 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             if not ctx.document_id:
                 return {"ok": False, "error": "nessun documento in elaborazione"}
             doc = await db.get(Document, ctx.document_id)
+            if not doc:
+                return {"ok": False, "error": "documento non trovato"}
             inserted = 0
             for line in tool_input.get("lines", []):
                 amount = to_decimal(line.get("line_amount"))

@@ -2,6 +2,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.deps import DB, CurrentUser
 from app.enums import UserRole
@@ -68,5 +69,13 @@ async def remove_member(member_id: uuid.UUID, user: CurrentUser, db: DB):
     member = await db.get(User, member_id)
     if not member or member.household_id != user.household_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Membro non trovato")
-    await db.delete(member)
-    await db.commit()
+    try:
+        await db.delete(member)
+        await db.commit()
+    except IntegrityError:
+        # Il membro ha documenti o spese collegati (vincoli FK).
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Impossibile rimuovere il membro: ha documenti o spese collegati nel nucleo.",
+        )

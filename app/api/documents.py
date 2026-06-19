@@ -1,5 +1,6 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
@@ -58,7 +59,11 @@ async def upload_document(
         response.headers["X-Document-Duplicate"] = "1"
         return existing
 
-    rel = f"{user.household_id}/{datetime.utcnow():%Y}/{digest[:16]}_{file.filename}"
+    # Sanifica il nome file per evitare path traversal (es. "../../evil"):
+    # si conserva solo il basename, normalizzando anche i separatori Windows.
+    safe_name = Path((file.filename or "documento").replace("\\", "/")).name or "documento"
+    year = datetime.now(timezone.utc).year
+    rel = f"{user.household_id}/{year}/{digest[:16]}_{safe_name}"
     path = get_storage().save(rel, data)
 
     doc = Document(

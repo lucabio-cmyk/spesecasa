@@ -64,6 +64,10 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
             if block.type == "text":
                 turn_text += block.text
             elif block.type == "tool_use":  # solo strumenti applicativi (client-side)
+                # La ricerca web è server-side (arriva come server_tool_use): non
+                # va mai eseguita localmente. Guardia difensiva per sicurezza.
+                if block.name == "web_search":
+                    continue
                 result = await dispatch(block.name, block.input, db, ctx)
                 tool_results.append(
                     {

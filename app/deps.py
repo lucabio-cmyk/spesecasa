@@ -24,10 +24,11 @@ async def get_current_user(
         user_id = payload.get("sub")
         if not user_id:
             raise ValueError("sub mancante")
+        user_uuid = uuid.UUID(str(user_id))
     except (jwt.PyJWTError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token non valido")
 
-    user = await db.get(User, uuid.UUID(user_id))
+    user = await db.get(User, user_uuid)
     if not user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Utente non trovato")
     return user
