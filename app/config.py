@@ -12,8 +12,13 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
-    agent_max_tokens: int = 4096
-    agent_max_tool_iterations: int = 12
+    # Budget generoso: scontrini multipagina e verifiche fiscali richiedono spazio.
+    agent_max_tokens: int = 8192
+    agent_max_tool_iterations: int = 24
+    # Ricerca web dell'agente per affinare/verificare le regole fiscali aggiornate.
+    enable_web_search: bool = True
+    web_search_max_uses: int = 6
+    web_search_country: str = "IT"
 
     # Auth
     jwt_secret: str = "cambia-questa-stringa"

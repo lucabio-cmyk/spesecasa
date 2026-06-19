@@ -14,6 +14,26 @@ from app.services.storage import get_storage
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 
+def _build_tools() -> list[dict]:
+    """Strumenti dell'app + (opzionale) ricerca web server-side per affinare e
+    verificare le regole fiscali aggiornate. La web_search è eseguita da
+    Anthropic: non richiede dispatch lato client."""
+    tools = list(TOOLS)
+    if settings.enable_web_search:
+        tools.append(
+            {
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": settings.web_search_max_uses,
+                "user_location": {
+                    "type": "approximate",
+                    "country": settings.web_search_country,
+                },
+            }
+        )
+    return tools
+
+
 def _file_block(mime_type: str, data: bytes) -> dict:
     b64 = base64.standard_b64encode(data).decode()
     if mime_type == "application/pdf":
@@ -25,28 +45,23 @@ def _file_block(mime_type: str, data: bytes) -> dict:
 
 
 async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -> str:
+    tools = _build_tools()
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
         resp = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=settings.agent_max_tokens,
             system=SYSTEM_PROMPT,
-            tools=TOOLS,
+            tools=tools,
             messages=messages,
         )
 
-        assistant_content: list[dict] = []
         tool_results: list[dict] = []
         turn_text = ""
-
         for block in resp.content:
             if block.type == "text":
                 turn_text += block.text
-                assistant_content.append({"type": "text", "text": block.text})
-            elif block.type == "tool_use":
-                assistant_content.append(
-                    {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
-                )
+            elif block.type == "tool_use":  # solo strumenti applicativi (client-side)
                 result = await dispatch(block.name, block.input, db, ctx)
                 tool_results.append(
                     {
@@ -55,12 +70,19 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
                         "content": json.dumps(result, default=str, ensure_ascii=False),
                     }
                 )
+            # I blocchi server-side (server_tool_use / web_search_tool_result)
+            # sono gestiti da Anthropic: vanno solo conservati nella history.
 
-        messages.append({"role": "assistant", "content": assistant_content})
-        final_text = turn_text
+        # Si conserva il content grezzo: preserva anche i blocchi di ricerca web.
+        messages.append({"role": "assistant", "content": resp.content})
+        if turn_text:
+            final_text = turn_text
 
-        if resp.stop_reason == "tool_use" and tool_results:
+        if tool_results:
             messages.append({"role": "user", "content": tool_results})
+            continue
+        if resp.stop_reason == "pause_turn":
+            # Turno messo in pausa (es. ricerca web lunga): si prosegue.
             continue
         break
 
