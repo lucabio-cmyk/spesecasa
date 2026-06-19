@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,12 +9,24 @@ from fastapi.staticfiles import StaticFiles
 from app.api import auth, chat, documents, expenses, household, stats
 from app.config import settings
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-5.5s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("app")
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path(settings.storage_dir).mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "Applicazione avviata (env=%s, storage=%s, static=%s)",
+        settings.app_env,
+        settings.storage_dir,
+        "presente" if STATIC_DIR.is_dir() else "assente",
+    )
     yield
 
 
