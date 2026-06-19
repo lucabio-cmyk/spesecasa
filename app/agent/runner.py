@@ -1,5 +1,6 @@
 import base64
 import json
+from datetime import date
 
 from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,12 +47,13 @@ def _file_block(mime_type: str, data: bytes) -> dict:
 
 async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -> str:
     tools = _build_tools()
+    system_text = f"{SYSTEM_PROMPT}\n\nData odierna: {date.today().isoformat()}."
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
         resp = await client.messages.create(
             model=settings.anthropic_model,
             max_tokens=settings.agent_max_tokens,
-            system=SYSTEM_PROMPT,
+            system=system_text,
             tools=tools,
             messages=messages,
         )

@@ -240,7 +240,7 @@ function navigate(view) {
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
-    chat: ["Assistente", "Interroga lo storico in linguaggio naturale"],
+    chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
     settings: ["Impostazioni", "Nucleo familiare e membri"],
   };
   $("#page-title").textContent = titles[view][0];
@@ -650,19 +650,20 @@ let chatHistory = [];
 function viewChat() {
   const c = $("#content");
   const suggestions = [
+    "Registra una spesa: 45€ in farmacia oggi",
+    "Ieri 60€ di benzina pagati da me",
     "Quanto ho speso in farmaci nel 2025?",
     "Riepilogo delle spese detraibili per soggetto",
-    "Quanto abbiamo speso al supermercato quest'anno?",
     "Mostrami le spese da verificare",
   ];
   c.innerHTML = `
     <div class="card card-pad chat-wrap">
       ${chatHistory.length ? "" : `<div class="suggest">${suggestions.map(s => `<button data-sg="${esc(s)}">${esc(s)}</button>`).join("")}</div>`}
       <div class="chat-scroll" id="chat-scroll">
-        ${chatHistory.length ? chatHistory.map(renderMsg).join("") : `<div class="empty"><div class="big">💬</div><h3>Ciao! Sono il tuo assistente spese.</h3><p>Chiedimi un riepilogo, un totale per categoria o cosa è detraibile. Rispondo sui dati del tuo nucleo.</p></div>`}
+        ${chatHistory.length ? chatHistory.map(renderMsg).join("") : `<div class="empty"><div class="big">💬</div><h3>Ciao! Sono il tuo assistente spese.</h3><p>Puoi <b>registrare una spesa</b> descrivendola a parole (es. “ho speso 30€ al supermercato oggi”): se manca qualcosa te lo chiedo. Oppure chiedimi un riepilogo, un totale per categoria o cosa è detraibile.</p></div>`}
       </div>
       <div class="chat-input">
-        <textarea class="input" id="chat-text" rows="1" placeholder="Scrivi una domanda…"></textarea>
+        <textarea class="input" id="chat-text" rows="1" placeholder="Registra una spesa o fai una domanda…"></textarea>
         <button class="btn btn-primary" id="chat-send">Invia</button>
       </div>
     </div>`;

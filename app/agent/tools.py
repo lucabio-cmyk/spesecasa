@@ -111,6 +111,30 @@ TOOLS = [
         },
     },
     {
+        "name": "record_expense",
+        "description": "Registra una spesa descritta dall'utente in chat, SENZA documento allegato. Usalo quando l'utente racconta una spesa a parole (es. 'ho speso 45 euro in farmacia oggi'). line_amount e obbligatorio: se manca, NON inventarlo, chiedi all'utente. Se la spesa puo essere fiscalmente rilevante e mancano soggetto pagante/beneficiario, chiedili prima di registrare.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "purchase_date": {"type": "string", "description": "AAAA-MM-GG"},
+                "merchant": {"type": "string", "description": "negozio o emittente"},
+                "description_original": {"type": "string", "description": "cosa ha detto l'utente"},
+                "description_normalized": {"type": "string", "description": "descrizione chiara e sintetica"},
+                "merch_category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
+                "quantity": {"type": "number"},
+                "line_amount": {"type": "number"},
+                "discount": {"type": "number"},
+                "fiscal_classification": {"type": "string", "enum": _FISCAL},
+                "scope": {"type": "string", "enum": _SCOPE},
+                "payer": {"type": "string", "description": "nome o id del soggetto pagante"},
+                "beneficiary": {"type": "string", "description": "nome o id del beneficiario"},
+                "fiscal_year": {"type": "integer"},
+                "reliability_note": {"type": "string"},
+            },
+            "required": ["line_amount"],
+        },
+    },
+    {
         "name": "query_expenses",
         "description": "Interroga lo storico spese del nucleo con filtri e restituisce aggregati (totale, per categoria, per classificazione fiscale).",
         "input_schema": {
@@ -246,6 +270,49 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 inserted += 1
             await db.commit()
             return {"ok": True, "inserted": inserted}
+
+        if name == "record_expense":
+            amount = to_decimal(tool_input.get("line_amount"))
+            if amount is None:
+                return {"ok": False, "error": "manca l'importo: chiedi all'utente quanto ha speso prima di registrare"}
+            pdate = to_date(tool_input.get("purchase_date"))
+            fyear = tool_input.get("fiscal_year")
+            if fyear:
+                fyear = int(fyear)
+            elif pdate:
+                fyear = pdate.year
+            payer = await resolve_member_id(db, ctx.household_id, tool_input.get("payer"))
+            beneficiary = await resolve_member_id(db, ctx.household_id, tool_input.get("beneficiary"))
+            expense = Expense(
+                household_id=ctx.household_id,
+                document_id=None,  # spesa manuale, senza documento allegato
+                payer_user_id=payer or ctx.user_id,
+                beneficiary_user_id=beneficiary,
+                purchase_date=pdate,
+                merchant=tool_input.get("merchant"),
+                description_original=tool_input.get("description_original"),
+                description_normalized=tool_input.get("description_normalized"),
+                merch_category=tool_input.get("merch_category"),
+                quantity=to_decimal(tool_input.get("quantity")),
+                line_amount=amount,
+                discount=to_decimal(tool_input.get("discount")),
+                fiscal_classification=FiscalClassification(
+                    tool_input.get("fiscal_classification", FiscalClassification.NON_RILEVANTE.value)
+                ),
+                scope=ExpenseScope(tool_input.get("scope", ExpenseScope.FAMILIARE.value)),
+                fiscal_year=fyear,
+                reliability_note=tool_input.get("reliability_note"),
+            )
+            db.add(expense)
+            await db.commit()
+            await db.refresh(expense)
+            return {
+                "ok": True,
+                "expense_id": str(expense.id),
+                "line_amount": str(expense.line_amount),
+                "fiscal_year": expense.fiscal_year,
+                "payer_user_id": str(expense.payer_user_id) if expense.payer_user_id else None,
+            }
 
         if name == "query_expenses":
             year = tool_input.get("fiscal_year")
