@@ -1,19 +1,29 @@
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from app.config import settings
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt opera su un massimo di 72 byte: troncare esplicitamente evita il
+# ValueError sollevato da bcrypt>=4 ed è coerente fra hash e verifica.
+_BCRYPT_MAX_BYTES = 72
+
+
+def _to_secret(password: str) -> bytes:
+    return password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
 
 
 def hash_password(password: str) -> str:
-    return _pwd.hash(password)
+    return bcrypt.hashpw(_to_secret(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    return _pwd.verify(password, hashed)
+    try:
+        return bcrypt.checkpw(_to_secret(password), hashed.encode("utf-8"))
+    except ValueError:
+        # Hash malformato/non bcrypt: trattalo come non valido invece di crashare.
+        return False
 
 
 def create_access_token(subject: str) -> str:
