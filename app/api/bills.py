@@ -109,14 +109,15 @@ async def export_csv(user: CurrentUser, db: DB, year: int | None = None):
             [
                 str(b.utility_type), b.supplier or "", b.bill_number or "",
                 b.period_start or "", b.period_end or "", b.due_date or "",
-                f"{float(b.total_amount or 0):.2f}".replace(".", ","),
+                f"{float(b.total_amount):.2f}".replace(".", ",") if b.total_amount is not None else "",
                 f"{float(b.consumption_quantity):.3f}".replace(".", ",") if b.consumption_quantity is not None else "",
                 b.consumption_unit or "", str(b.status), b.paid_date or "",
             ]
         )
     suffix = f"_{year}" if year else ""
+    # BOM UTF-8: Excel su Windows interpreta correttamente gli accenti (Unità, ...).
     return Response(
-        content=buf.getvalue(),
+        content="\ufeff" + buf.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="bollette{suffix}.csv"'},
     )

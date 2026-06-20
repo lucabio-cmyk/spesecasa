@@ -533,6 +533,11 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             status_raw = tool_input.get("status")
             status = BillStatus(status_raw) if status_raw in _BILL_STATUS else BillStatus.DA_PAGARE
             payer = await resolve_member_id(db, ctx.household_id, tool_input.get("payer"))
+            # Importo 0,00 è valido (es. nota di credito/conguaglio): usa il
+            # fallback del documento solo se l'importo è davvero assente (None).
+            total = to_decimal(tool_input.get("total_amount"))
+            if total is None and doc:
+                total = doc.total_amount
             bill = Bill(
                 household_id=ctx.household_id,
                 document_id=doc_id,
@@ -545,8 +550,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 period_end=period_end,
                 issue_date=issue_date or (doc.doc_date if doc else None),
                 due_date=due_date,
-                total_amount=to_decimal(tool_input.get("total_amount"))
-                or (doc.total_amount if doc else None),
+                total_amount=total,
                 energy_cost=to_decimal(tool_input.get("energy_cost")),
                 fixed_cost=to_decimal(tool_input.get("fixed_cost")),
                 taxes=to_decimal(tool_input.get("taxes")),

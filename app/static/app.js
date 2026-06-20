@@ -832,7 +832,9 @@ function openBillForm(bill = null) {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target).entries());
     const body = {};
-    for (const [k, v] of Object.entries(fd)) { if (v !== "" && v != null) body[k] = v; }
+    // I campi svuotati vanno inviati come null: così il PATCH (exclude_unset)
+    // li azzera nel DB. In creazione i null vengono scartati da exclude_none.
+    for (const [k, v] of Object.entries(fd)) { body[k] = v === "" ? null : v; }
     try {
       if (bill) await api(`/bills/${bill.id}`, { method: "PATCH", body });
       else await api("/bills", { method: "POST", body });
