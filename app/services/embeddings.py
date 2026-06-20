@@ -32,7 +32,7 @@ async def build_document_text(db: AsyncSession, document: Document) -> str:
     sintesi + voci) da trasformare in embedding per la ricerca semantica."""
     parts: list[str] = []
     if document.doc_type:
-        parts.append(f"Tipo: {document.doc_type}")
+        parts.append(f"Tipo: {document.doc_type.value}")
     if document.issuer:
         parts.append(f"Emittente: {document.issuer}")
     if document.recipient_name:
@@ -42,7 +42,7 @@ async def build_document_text(db: AsyncSession, document: Document) -> str:
     if document.total_amount is not None:
         parts.append(f"Totale: {document.total_amount}")
     if document.fiscal_classification:
-        parts.append(f"Classificazione fiscale: {document.fiscal_classification}")
+        parts.append(f"Classificazione fiscale: {document.fiscal_classification.value}")
     if document.tags:
         parts.append(f"Tag: {document.tags}")
     if document.summary:
@@ -70,12 +70,12 @@ async def build_document_text(db: AsyncSession, document: Document) -> str:
 
 
 async def index_document(db: AsyncSession, document: Document) -> bool:
-    """Calcola e salva l'embedding del documento. No-op (ritorna False) se la
-    ricerca semantica è disattivata o il provider non è configurato."""
+    """Calcola e imposta l'embedding del documento. No-op (ritorna False) se la
+    ricerca semantica è disattivata o il provider non è configurato. Il commit
+    della transazione è responsabilità del chiamante."""
     text = await build_document_text(db, document)
     vector = await embed_text(text)
     if vector is None:
         return False
     document.embedding = vector
-    await db.commit()
     return True

@@ -3,7 +3,7 @@ automatico alla ricerca per parole chiave quando la feature è disattivata, il
 provider di embedding non è configurato, o nessun documento è ancora indicizzato."""
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
@@ -22,21 +22,21 @@ def _clamp_limit(limit: int | None) -> int:
 async def _keyword_search(
     db: AsyncSession, household_id: uuid.UUID, query: str, limit: int
 ) -> list[SearchHit]:
-    like = f"%{query.lower()}%"
-    haystack = (
-        func.lower(func.coalesce(Document.summary, ""))
-        .concat(" ")
-        .concat(func.lower(func.coalesce(Document.issuer, "")))
-        .concat(" ")
-        .concat(func.lower(func.coalesce(Document.recipient_name, "")))
-        .concat(" ")
-        .concat(func.lower(func.coalesce(Document.tags, "")))
-        .concat(" ")
-        .concat(func.lower(func.coalesce(Document.document_number, "")))
-    )
+    # ilike è già case-insensitive e or_ su singole colonne consente al planner
+    # di sfruttare gli indici (es. trigram) evitando la full table scan.
+    like = f"%{query}%"
     stmt = (
         select(Document)
-        .where(Document.household_id == household_id, haystack.like(like))
+        .where(
+            Document.household_id == household_id,
+            or_(
+                Document.summary.ilike(like),
+                Document.issuer.ilike(like),
+                Document.recipient_name.ilike(like),
+                Document.tags.ilike(like),
+                Document.document_number.ilike(like),
+            ),
+        )
         .order_by(Document.created_at.desc())
         .limit(limit)
     )
@@ -53,7 +53,12 @@ async def search_documents(
     if not query:
         return [], "empty"
 
-    vector = await embed_text(query)
+    # Resilienza: se il provider di embedding è irraggiungibile / in errore,
+    # si ripiega in modo trasparente sulla ricerca per parole chiave.
+    try:
+        vector = await embed_text(query)
+    except Exception:
+        vector = None
     if vector is not None:
         distance = Document.embedding.cosine_distance(vector)
         stmt = (

@@ -136,7 +136,8 @@ async def process_document(db: AsyncSession, document: Document) -> None:
         await db.commit()
         # Indicizzazione semantica (best-effort: non deve far fallire la pipeline).
         try:
-            await index_document(db, document)
+            if await index_document(db, document):
+                await db.commit()
         except Exception:
             await db.rollback()
     except Exception as exc:
