@@ -149,13 +149,27 @@ async def upcoming(
 async def overview(
     db: AsyncSession, household_id: uuid.UUID, year: int | None = None
 ) -> dict:
-    """KPI sintetici per la dashboard delle spese di casa."""
-    base = select(
-        func.coalesce(func.sum(Bill.total_amount), 0), func.count(Bill.id)
-    ).where(Bill.household_id == household_id)
+    """KPI sintetici per la dashboard delle spese di casa. Le spese di
+    CONDOMINIO sono tenute distinte dalle bollette delle utenze (luce, gas,
+    acqua, ...): hanno natura diversa (quote ordinarie/straordinarie, lavori)
+    e vanno mostrate come categoria a sé nella dashboard."""
+    # Totali divisi per "condominio" vs resto (utenze), in un'unica query.
+    split_stmt = select(
+        Bill.utility_type,
+        func.coalesce(func.sum(Bill.total_amount), 0),
+        func.count(Bill.id),
+    ).where(Bill.household_id == household_id).group_by(Bill.utility_type)
     if year:
-        base = base.where(Bill.fiscal_year == year)
-    total, count = (await db.execute(base)).one()
+        split_stmt = split_stmt.where(Bill.fiscal_year == year)
+    utilities_total, utilities_count = 0.0, 0
+    condo_total, condo_count = 0.0, 0
+    for utype, total, count in (await db.execute(split_stmt)).all():
+        if str(utype) == UtilityType.CONDOMINIO.value:
+            condo_total += float(total or 0)
+            condo_count += int(count or 0)
+        else:
+            utilities_total += float(total or 0)
+            utilities_count += int(count or 0)
 
     open_stmt = select(
         func.coalesce(func.sum(Bill.total_amount), 0), func.count(Bill.id)
@@ -173,8 +187,15 @@ async def overview(
     overdue_count = (await db.execute(overdue_stmt)).scalar_one()
 
     return {
-        "total": float(total or 0),
-        "count": int(count or 0),
+        # totale complessivo (utenze + condominio): retrocompatibile
+        "total": round(utilities_total + condo_total, 2),
+        "count": utilities_count + condo_count,
+        # bollette delle utenze (escluso condominio)
+        "utilities_total": round(utilities_total, 2),
+        "utilities_count": utilities_count,
+        # spese condominiali, distinte
+        "condo_total": round(condo_total, 2),
+        "condo_count": condo_count,
         "open_total": float(open_total or 0),
         "open_count": int(open_count or 0),
         "overdue_count": int(overdue_count or 0),

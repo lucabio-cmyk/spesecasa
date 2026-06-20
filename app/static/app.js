@@ -401,15 +401,15 @@ function viewUpload() {
           <div class="big">📤</div>
           <h3>Trascina qui i documenti</h3>
           <p>oppure <u>clicca per selezionare</u> · scontrini, fatture, ricevute</p>
-          <p class="hint">Immagini (JPG, PNG, HEIC) o PDF · più file insieme</p>
-          <input type="file" id="file-input" multiple accept="image/*,application/pdf" hidden>
+          <p class="hint">Immagini (JPG, PNG, HEIC), PDF o fogli Excel (XLS, XLSX) · più file insieme</p>
+          <input type="file" id="file-input" multiple accept="image/*,application/pdf,.xls,.xlsx,.xlsm,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
         </div>
         <div id="upload-list"></div>
       </div>
       <div class="card card-pad">
         <h3 style="margin-bottom:10px">Come funziona</h3>
         <ol style="color:var(--text-soft);font-size:14px;padding-left:18px;line-height:1.8;margin:0">
-          <li>Carichi il documento (foto o PDF).</li>
+          <li>Carichi il documento (foto, PDF o foglio Excel).</li>
           <li>L'assistente AI lo <b>legge</b>, estrae data, importo ed emittente.</li>
           <li>Classifica fiscalmente e <b>attribuisce</b> pagante e beneficiario.</li>
           <li>Per gli scontrini analizza le righe e le <b>categorizza</b>.</li>
@@ -433,7 +433,8 @@ async function handleFiles(files) {
   for (const file of files) {
     const row = document.createElement("div");
     row.className = "upload-item";
-    row.innerHTML = `<span class="fi">${file.type.includes("pdf") ? "📄" : "🖼️"}</span>
+    const isSheet = /\.(xlsx?|xlsm)$/i.test(file.name) || /excel|spreadsheet|ms-excel/i.test(file.type || "");
+    row.innerHTML = `<span class="fi">${isSheet ? "📊" : file.type.includes("pdf") ? "📄" : "🖼️"}</span>
       <div class="meta"><b>${esc(file.name)}</b><div class="progress"><i style="width:30%"></i></div></div>
       <span class="status"><span class="spin"></span></span>`;
     list.prepend(row);
@@ -547,6 +548,7 @@ async function openDocument(id) {
   try {
     const [doc, lines] = await Promise.all([api(`/documents/${id}`), api(`/documents/${id}/expenses`)]);
     const isImg = (doc.mime_type || "").startsWith("image/");
+    const isSheet = /excel|spreadsheet|ms-excel/i.test(doc.mime_type || "") || /\.(xlsx?|xlsm)$/i.test(doc.original_filename || "");
     // Il file originale è protetto da JWT in header: img/iframe/link nativi non
     // lo inviano. Scarichiamo il file via api() (che allega il token) e usiamo
     // un blob URL come sorgente. Il blob viene revocato in closeModal().
@@ -581,7 +583,11 @@ async function openDocument(id) {
           <div class="card table-wrap" style="margin-bottom:18px"><table class="data"><thead><tr><th>Descrizione</th><th>Categoria</th><th class="num">Importo</th></tr></thead>
           <tbody>${lines.map(l => `<tr><td>${esc(l.description_normalized || l.description_original || "—")}</td><td>${esc(l.merch_category || "—")}</td><td class="num">${eur(l.line_amount)}</td></tr>`).join("")}</tbody></table></div>` : ""}
         <h4 style="margin-bottom:8px">File originale</h4>
-        ${isImg ? `<img class="preview-img" src="${fileUrl}" alt="anteprima">` : `<iframe class="preview-frame" src="${fileUrl}"></iframe>`}
+        ${isImg
+          ? `<img class="preview-img" src="${fileUrl}" alt="anteprima">`
+          : isSheet
+            ? `<div class="card card-pad empty" style="background:var(--surface-2)"><div class="big">📊</div><p>Foglio di calcolo Excel${doc.original_filename ? ` · ${esc(doc.original_filename)}` : ""}.<br>Usa “Apri file” qui sotto per scaricarlo.</p></div>`
+            : `<iframe class="preview-frame" src="${fileUrl}"></iframe>`}
         <div class="row" style="margin-top:18px">
           <a class="btn btn-ghost" href="${fileUrl}" target="_blank" rel="noopener">⬇️ Apri file</a>
           <button class="btn btn-ghost" data-reprocess="${id}">🔄 Rielabora</button>
@@ -701,15 +707,23 @@ async function viewBills() {
     const [ov, analysis, up] = await Promise.all([
       api(`/bills/overview${yq}`), api(`/bills/analysis${yq}`), api(`/bills/upcoming`),
     ]);
+    // Bollette delle utenze e spese condominiali sono distinte (categoria
+    // diversa): i totali separati arrivano da /bills/overview.
+    const utilTotal = ov.utilities_total != null ? ov.utilities_total : ov.total;
+    const utilCount = ov.utilities_count != null ? ov.utilities_count : ov.count;
     const kpis = [
-      { label: "Spesa bollette", value: eur(ov.total), icon: "🏠", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${ov.count} bollette` },
-      { label: "Da pagare", value: eur(ov.open_total), icon: "📨", bg: "var(--amber-100)", fg: "#b45309", delta: `${ov.open_count} aperte` },
+      { label: "Bollette (utenze)", value: eur(utilTotal), icon: "💡", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${utilCount} bollett${utilCount === 1 ? "a" : "e"} · luce, gas, acqua…` },
+      { label: "Spese condominiali", value: eur(ov.condo_total || 0), icon: "🏢", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${ov.condo_count || 0} voc${(ov.condo_count || 0) === 1 ? "e" : "i"} di condominio` },
+      { label: "Da pagare", value: eur(ov.open_total), icon: "📨", bg: "var(--amber-100)", fg: "#b45309", delta: `${ov.open_count} apert${ov.open_count === 1 ? "a" : "e"}` },
       { label: "Scadute", value: ov.overdue_count, icon: "⏰", bg: ov.overdue_count ? "var(--red-100, #fee2e2)" : "var(--blue-100)", fg: ov.overdue_count ? "#b91c1c" : "#1d4ed8", delta: "non pagate oltre scadenza" },
-      { label: "Costo medio/bolletta", value: eur(ov.count ? ov.total / ov.count : 0), icon: "📊", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "sul periodo" },
     ];
 
     const sched = renderSchedule(up);
-    const costRows = analysis.filter(r => r.total > 0).map(r => ({ label: UTILITY_LABELS[r.utility_type] || r.utility_type, total: r.total }));
+    // Nel grafico per tipo, distinguiamo visivamente le utenze dal condominio.
+    const costRows = analysis.filter(r => r.total > 0).map(r => ({
+      label: (r.utility_type === "condominio" ? "🏢 " : "") + (UTILITY_LABELS[r.utility_type] || r.utility_type),
+      total: r.total,
+    }));
 
     c.innerHTML = `
       <div class="grid cols-4">${kpis.map(k => `

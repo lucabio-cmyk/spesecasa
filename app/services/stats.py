@@ -4,15 +4,19 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.enums import UtilityType
 from app.models.bill import Bill
 from app.models.document import Document
 from app.models.expense import Expense
 from app.models.user import User
 
-# Categoria con cui le bollette/spese di casa compaiono nelle viste aggregate
+# Categorie con cui le bollette/spese di casa compaiono nelle viste aggregate
 # della dashboard, così da contare *tutte* le spese senza confonderle con le
-# categorie merceologiche degli scontrini.
-BILLS_CATEGORY = "Bollette / casa"
+# categorie merceologiche degli scontrini. Le spese di CONDOMINIO sono tenute
+# distinte dalle bollette delle utenze: hanno natura diversa e vanno mostrate
+# come categoria a sé.
+BILLS_CATEGORY_UTILITIES = "Bollette / utenze"
+BILLS_CATEGORY_CONDO = "Spese condominiali"
 # Le bollette sono spese del nucleo: nelle ripartizioni per ambito le
 # attribuiamo all'ambito familiare.
 BILLS_SCOPE = "familiare"
@@ -32,10 +36,13 @@ async def by_category(db: AsyncSession, household_id: uuid.UUID, year: int | Non
         for c, t, n in res.all()
     ]
 
-    # Aggiunge le bollette come categoria a sé, per tenere conto di tutte le spese.
-    btotal, bcount = await _bills_total(db, household_id, year)
-    if bcount:
-        rows.append({"category": BILLS_CATEGORY, "total": round(btotal, 2), "count": bcount})
+    # Aggiunge le bollette per tenere conto di tutte le spese, distinguendo le
+    # utenze (luce, gas, acqua, ...) dalle spese condominiali.
+    util_t, util_c, condo_t, condo_c = await _bills_split_total(db, household_id, year)
+    if util_c:
+        rows.append({"category": BILLS_CATEGORY_UTILITIES, "total": round(util_t, 2), "count": util_c})
+    if condo_c:
+        rows.append({"category": BILLS_CATEGORY_CONDO, "total": round(condo_t, 2), "count": condo_c})
 
     rows.sort(key=lambda r: r["total"], reverse=True)
     return rows
@@ -141,6 +148,33 @@ async def _bills_total(
         stmt = stmt.where(Bill.fiscal_year == year)
     total, count = (await db.execute(stmt)).one()
     return float(total or 0), int(count or 0)
+
+
+async def _bills_split_total(
+    db: AsyncSession, household_id: uuid.UUID, year: int | None = None
+) -> tuple[float, int, float, int]:
+    """Totale/numero delle bollette diviso tra utenze e condominio:
+    (utenze_totale, utenze_n, condominio_totale, condominio_n)."""
+    stmt = (
+        select(
+            Bill.utility_type,
+            func.coalesce(func.sum(Bill.total_amount), 0),
+            func.count(Bill.id),
+        )
+        .where(Bill.household_id == household_id)
+        .group_by(Bill.utility_type)
+    )
+    if year:
+        stmt = stmt.where(Bill.fiscal_year == year)
+    util_t, util_c, condo_t, condo_c = 0.0, 0, 0.0, 0
+    for utype, total, count in (await db.execute(stmt)).all():
+        if str(utype) == UtilityType.CONDOMINIO.value:
+            condo_t += float(total or 0)
+            condo_c += int(count or 0)
+        else:
+            util_t += float(total or 0)
+            util_c += int(count or 0)
+    return util_t, util_c, condo_t, condo_c
 
 
 async def fiscal_summary(
