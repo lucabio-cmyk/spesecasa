@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, chat, documents, expenses, household, stats
+from app.api import auth, bills, chat, documents, expenses, household, stats
 from app.config import settings
 
 logging.basicConfig(
@@ -54,6 +54,7 @@ app.include_router(auth.router)
 app.include_router(household.router)
 app.include_router(documents.router)
 app.include_router(expenses.router)
+app.include_router(bills.router)
 app.include_router(stats.router)
 app.include_router(chat.router)
 

@@ -27,12 +27,26 @@ const STATUS_LABELS = {
 const SCOPE_LABELS = { personale: "Personale", familiare: "Familiare" };
 const DOCTYPE_LABELS = {
   scontrino: "Scontrino", fattura: "Fattura", ricevuta: "Ricevuta",
-  ricevuta_sanitaria: "Ricevuta sanitaria", f24: "F24", bonifico: "Bonifico",
+  ricevuta_sanitaria: "Ricevuta sanitaria", bolletta: "Bolletta", f24: "F24", bonifico: "Bonifico",
   contratto: "Contratto", polizza: "Polizza", altro: "Altro",
 };
 const DOCTYPE_ICONS = {
-  scontrino: "🧾", fattura: "📄", ricevuta: "🧾", ricevuta_sanitaria: "💊",
+  scontrino: "🧾", fattura: "📄", ricevuta: "🧾", ricevuta_sanitaria: "💊", bolletta: "💡",
   f24: "🏛️", bonifico: "🏦", contratto: "📑", polizza: "🛡️", altro: "📎",
+};
+const UTILITY_LABELS = {
+  energia_elettrica: "Energia elettrica", gas: "Gas", acqua: "Acqua",
+  rifiuti: "Rifiuti (TARI)", internet_telefono: "Internet / Telefono",
+  riscaldamento: "Riscaldamento", condominio: "Condominio",
+  assicurazione_casa: "Assicurazione casa", manutenzione: "Manutenzione", altro: "Altro",
+};
+const UTILITY_ICONS = {
+  energia_elettrica: "💡", gas: "🔥", acqua: "💧", rifiuti: "🗑️",
+  internet_telefono: "🌐", riscaldamento: "🌡️", condominio: "🏢",
+  assicurazione_casa: "🛡️", manutenzione: "🔧", altro: "🏠",
+};
+const BILL_STATUS_LABELS = {
+  da_pagare: "Da pagare", pagata: "Pagata", scaduta: "Scaduta", rateizzata: "Rateizzata",
 };
 const CATEGORIES = [
   "frutta e verdura","carne e pesce","latticini e uova","pane, forno e colazione",
@@ -183,6 +197,7 @@ const NAV = [
   { id: "upload", icon: "⬆️", label: "Carica documento" },
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "expenses", icon: "💶", label: "Spese" },
+  { id: "bills", icon: "🏠", label: "Casa & Bollette" },
   { id: "chat", icon: "💬", label: "Assistente" },
   { id: "settings", icon: "⚙️", label: "Impostazioni" },
 ];
@@ -240,13 +255,14 @@ function navigate(view) {
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
+    bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
     settings: ["Impostazioni", "Nucleo familiare e membri"],
   };
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -645,6 +661,187 @@ async function loadExpenses() {
   } catch (err) { wrap.innerHTML = errorBox(err.message); }
 }
 
+/* ---------- View: Casa & Bollette ---------- */
+let billFilters = { utility_type: "", status: "" };
+async function viewBills() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  $("#topbar-actions").appendChild(await yearSelector(viewBills));
+  const addBtn = document.createElement("button");
+  addBtn.className = "btn btn-primary btn-sm";
+  addBtn.innerHTML = "➕ Aggiungi bolletta";
+  addBtn.addEventListener("click", () => openBillForm());
+  $("#topbar-actions").appendChild(addBtn);
+  const exp = document.createElement("button");
+  exp.className = "btn btn-ghost btn-sm";
+  exp.innerHTML = "⬇️ CSV";
+  exp.addEventListener("click", () => downloadAuthed(`/bills/export.csv${State.year ? `?year=${State.year}` : ""}`, `bollette${State.year ? "_" + State.year : ""}.csv`));
+  $("#topbar-actions").appendChild(exp);
+
+  const yq = State.year ? `?year=${State.year}` : "";
+  try {
+    const [ov, analysis, up] = await Promise.all([
+      api(`/bills/overview${yq}`), api(`/bills/analysis${yq}`), api(`/bills/upcoming`),
+    ]);
+    const kpis = [
+      { label: "Spesa bollette", value: eur(ov.total), icon: "🏠", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${ov.count} bollette` },
+      { label: "Da pagare", value: eur(ov.open_total), icon: "📨", bg: "var(--amber-100)", fg: "#b45309", delta: `${ov.open_count} aperte` },
+      { label: "Scadute", value: ov.overdue_count, icon: "⏰", bg: ov.overdue_count ? "var(--red-100, #fee2e2)" : "var(--blue-100)", fg: ov.overdue_count ? "#b91c1c" : "#1d4ed8", delta: "non pagate oltre scadenza" },
+      { label: "Costo medio/bolletta", value: eur(ov.count ? ov.total / ov.count : 0), icon: "📊", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "sul periodo" },
+    ];
+
+    const sched = renderSchedule(up);
+    const costRows = analysis.filter(r => r.total > 0).map(r => ({ label: UTILITY_LABELS[r.utility_type] || r.utility_type, total: r.total }));
+
+    c.innerHTML = `
+      <div class="grid cols-4">${kpis.map(k => `
+        <div class="card kpi">
+          <div class="row between"><span class="label">${k.label}</span><span class="ico-box" style="background:${k.bg};color:${k.fg}">${k.icon}</span></div>
+          <span class="value">${k.value}</span><span class="delta">${k.delta}</span>
+        </div>`).join("")}
+      </div>
+
+      ${sched}
+
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card card-pad">
+          <h3 style="margin-bottom:16px">Costo per tipo di utenza</h3>
+          ${barChart(costRows, { labelKey: "label", valueKey: "total" })}
+        </div>
+        <div class="card card-pad">
+          <h3 style="margin-bottom:16px">Valutazione costi e consumi</h3>
+          ${analysis.length ? `<div class="table-wrap"><table class="data">
+            <thead><tr><th>Utenza</th><th class="num">Totale</th><th class="num">Media</th><th class="num">Consumo</th><th class="num">€/unità</th></tr></thead>
+            <tbody>${analysis.map(r => `<tr>
+              <td>${UTILITY_ICONS[r.utility_type] || "🏠"} ${esc(UTILITY_LABELS[r.utility_type] || r.utility_type)}</td>
+              <td class="num">${eur(r.total)}</td>
+              <td class="num">${eur(r.avg_amount)}</td>
+              <td class="num">${r.consumption ? `${r.consumption.toLocaleString("it-IT")} ${esc(r.consumption_unit || "")}` : "—"}</td>
+              <td class="num">${r.unit_cost != null ? `${r.unit_cost.toLocaleString("it-IT", { minimumFractionDigits: 4, maximumFractionDigits: 4 })} €` : "—"}</td>
+            </tr>`).join("")}</tbody></table></div>` : `<div class="empty"><div class="big">💡</div><p>Nessuna bolletta registrata per il periodo.</p></div>`}
+        </div>
+      </div>
+
+      <div class="filters" style="margin-top:18px">
+        <select class="select" id="bf-utility">${optList({ "": "Tutte le utenze", ...UTILITY_LABELS }, billFilters.utility_type)}</select>
+        <select class="select" id="bf-status">${optList({ "": "Tutti gli stati", ...BILL_STATUS_LABELS }, billFilters.status)}</select>
+        <button class="btn btn-ghost btn-sm" id="bf-reset">Azzera</button>
+      </div>
+      <div id="bill-list">${skeletonRows()}</div>`;
+
+    $("#bf-utility").addEventListener("change", (e) => { billFilters.utility_type = e.target.value; loadBills(); });
+    $("#bf-status").addEventListener("change", (e) => { billFilters.status = e.target.value; loadBills(); });
+    $("#bf-reset").addEventListener("click", () => { billFilters = { utility_type: "", status: "" }; viewBills(); });
+    c.querySelectorAll("[data-pay]").forEach(b => b.addEventListener("click", () => payBill(b.dataset.pay)));
+    loadBills();
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
+}
+
+function renderSchedule(up) {
+  if (!up.overdue.length && !up.due_soon.length) {
+    return `<div class="card card-pad" style="margin-top:16px;border-left:4px solid var(--green-500, #22c55e);display:flex;gap:12px;align-items:center">
+      <span style="font-size:22px">✅</span>
+      <div><b>Nessuna bolletta in scadenza</b><div class="sub" style="color:var(--text-soft);font-size:13px">Tutte le bollette registrate risultano pagate.</div></div></div>`;
+  }
+  const row = (b, late) => `<div class="row between" style="padding:10px 0;border-bottom:1px solid var(--border, #e5e7eb)">
+    <div><b>${UTILITY_ICONS[b.utility_type] || "🏠"} ${esc(UTILITY_LABELS[b.utility_type] || b.utility_type)}</b>${b.supplier ? `<div class="hint">${esc(b.supplier)}</div>` : ""}</div>
+    <div style="text-align:right">
+      <b>${eur(b.total_amount)}</b>
+      <div class="hint" style="color:${late ? "#b91c1c" : "var(--text-soft)"}">${b.due_date ? fmtDate(b.due_date) : "senza scadenza"}${late ? ` · ${b.days_overdue}g di ritardo` : (b.days_left != null ? ` · tra ${b.days_left}g` : "")}</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" data-pay="${b.id}" style="margin-left:12px">Segna pagata</button>
+  </div>`;
+  return `<div class="card card-pad" style="margin-top:16px">
+    <div class="row between" style="margin-bottom:8px"><h3>📅 Scadenzario</h3><span class="hint">Totale aperto: <b>${eur(up.open_total)}</b></span></div>
+    ${up.overdue.length ? `<div style="margin-bottom:8px"><span class="badge b-scaduta" style="background:#fee2e2;color:#b91c1c">${up.overdue.length} scadut${up.overdue.length === 1 ? "a" : "e"}</span></div>${up.overdue.map(b => row(b, true)).join("")}` : ""}
+    ${up.due_soon.length ? `<div style="margin:12px 0 8px"><span class="hint">In arrivo</span></div>${up.due_soon.map(b => row(b, false)).join("")}` : ""}
+  </div>`;
+}
+
+async function loadBills() {
+  const wrap = $("#bill-list"); if (!wrap) return;
+  const p = new URLSearchParams();
+  if (State.year) p.set("fiscal_year", State.year);
+  if (billFilters.utility_type) p.set("utility_type", billFilters.utility_type);
+  if (billFilters.status) p.set("status", billFilters.status);
+  try {
+    const rows = await api(`/bills?${p.toString()}`);
+    if (!rows.length) { wrap.innerHTML = emptyBox("💡", "Nessuna bolletta", "Carica una bolletta dall'Archivio o aggiungila a mano: l'assistente riconosce luce, gas, acqua, rifiuti e altro.", "Carica documento", "upload"); bindEmpty(wrap); return; }
+    const total = rows.reduce((s, r) => s + Number(r.total_amount || 0), 0);
+    wrap.innerHTML = `
+      <div class="row between" style="margin-bottom:12px"><span class="hint">${rows.length} bollette</span><b>Totale: ${eur(total)}</b></div>
+      <div class="card table-wrap"><table class="data">
+        <thead><tr><th>Utenza</th><th>Fornitore</th><th>Periodo</th><th>Scadenza</th><th class="num">Importo</th><th>Stato</th><th></th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr data-id="${r.id}">
+            <td><b>${UTILITY_ICONS[r.utility_type] || "🏠"} ${esc(UTILITY_LABELS[r.utility_type] || r.utility_type)}</b></td>
+            <td>${esc(r.supplier || "—")}${r.consumption_quantity ? `<div class="hint">${Number(r.consumption_quantity).toLocaleString("it-IT")} ${esc(r.consumption_unit || "")}</div>` : ""}</td>
+            <td class="mono">${r.period_start ? fmtDate(r.period_start) : "—"}${r.period_end ? ` → ${fmtDate(r.period_end)}` : ""}</td>
+            <td class="mono">${fmtDate(r.due_date)}</td>
+            <td class="num">${eur(r.total_amount)}</td>
+            <td>${badge(r.status, BILL_STATUS_LABELS)}</td>
+            <td class="num row" style="gap:4px;justify-content:flex-end">
+              ${r.status !== "pagata" ? `<button class="btn-icon" data-pay="${r.id}" title="Segna pagata">✅</button>` : ""}
+              <button class="btn-icon" data-edit="${r.id}" title="Modifica">✏️</button>
+              <button class="btn-icon" data-del="${r.id}" title="Elimina">🗑️</button>
+            </td>
+          </tr>`).join("")}
+        </tbody></table></div>`;
+
+    wrap.querySelectorAll("[data-pay]").forEach(b => b.addEventListener("click", () => payBill(b.dataset.pay)));
+    wrap.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => openBillForm(rows.find(r => r.id === b.dataset.edit))));
+    wrap.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
+      if (!(await confirmDialog("Eliminare la bolletta?", "La bolletta verrà rimossa definitivamente."))) return;
+      try { await api(`/bills/${b.dataset.del}`, { method: "DELETE" }); toast("Bolletta eliminata", { type: "ok" }); viewBills(); }
+      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    }));
+  } catch (err) { wrap.innerHTML = errorBox(err.message); }
+}
+
+async function payBill(id) {
+  try { await api(`/bills/${id}/pay`, { method: "POST" }); toast("Bolletta segnata come pagata", { type: "ok" }); viewBills(); }
+  catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+}
+
+function openBillForm(bill = null) {
+  const b = bill || {};
+  const memberOpts = State.members.map(m => [m.id, m.full_name]);
+  openModal(`
+    <div class="modal-head"><h3>${bill ? "Modifica bolletta" : "Aggiungi bolletta"}</h3><button class="btn-icon" data-close>✕</button></div>
+    <form id="bill-form" class="grid cols-2" style="gap:12px">
+      <div class="field"><label>Tipo utenza</label><select class="select" name="utility_type">${optList(UTILITY_LABELS, b.utility_type || "altro")}</select></div>
+      <div class="field"><label>Fornitore</label><input class="input" name="supplier" value="${esc(b.supplier || "")}"></div>
+      <div class="field"><label>Importo totale (€)</label><input class="input" type="number" step="0.01" name="total_amount" value="${esc(b.total_amount ?? "")}"></div>
+      <div class="field"><label>Scadenza</label><input class="input" type="date" name="due_date" value="${esc(b.due_date || "")}"></div>
+      <div class="field"><label>Periodo dal</label><input class="input" type="date" name="period_start" value="${esc(b.period_start || "")}"></div>
+      <div class="field"><label>Periodo al</label><input class="input" type="date" name="period_end" value="${esc(b.period_end || "")}"></div>
+      <div class="field"><label>Consumo</label><input class="input" type="number" step="0.001" name="consumption_quantity" value="${esc(b.consumption_quantity ?? "")}"></div>
+      <div class="field"><label>Unità</label><input class="input" name="consumption_unit" placeholder="kWh, Smc, m³" value="${esc(b.consumption_unit || "")}"></div>
+      <div class="field"><label>Stato</label><select class="select" name="status">${optList(BILL_STATUS_LABELS, b.status || "da_pagare")}</select></div>
+      <div class="field"><label>Intestatario</label><select class="select" name="payer_user_id">${optList({ "": "—", ...Object.fromEntries(memberOpts) }, b.payer_user_id || "")}</select></div>
+      <div class="field" style="grid-column:1/-1"><label>Note</label><input class="input" name="notes" value="${esc(b.notes || "")}"></div>
+      <div class="row between" style="grid-column:1/-1;margin-top:6px">
+        <button type="button" class="btn btn-ghost" data-close>Annulla</button>
+        <button type="submit" class="btn btn-primary">${bill ? "Salva" : "Aggiungi"}</button>
+      </div>
+    </form>`);
+  $("#modal-root").querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", closeModal));
+  $("#bill-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const body = {};
+    for (const [k, v] of Object.entries(fd)) { if (v !== "" && v != null) body[k] = v; }
+    try {
+      if (bill) await api(`/bills/${bill.id}`, { method: "PATCH", body });
+      else await api("/bills", { method: "POST", body });
+      toast(bill ? "Bolletta aggiornata" : "Bolletta aggiunta", { type: "ok" });
+      closeModal(); viewBills();
+    } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
+  });
+}
+
 /* ---------- View: Chat ---------- */
 let chatHistory = [];
 function viewChat() {
@@ -653,8 +850,9 @@ function viewChat() {
     "Registra una spesa: 45€ in farmacia oggi",
     "Ieri 60€ di benzina pagati da me",
     "Quanto ho speso in farmaci nel 2025?",
+    "Quanto spendo di luce e gas? È aumentato?",
+    "Quali bollette devo ancora pagare?",
     "Riepilogo delle spese detraibili per soggetto",
-    "Mostrami le spese da verificare",
   ];
   c.innerHTML = `
     <div class="card card-pad chat-wrap">

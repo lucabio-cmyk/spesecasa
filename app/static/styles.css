@@ -178,6 +178,10 @@ button { font-family: inherit; cursor: pointer; }
 .b-failed { background: var(--rose-100); color: #be123c; }
 .b-personale { background: #ede9fe; color: #6d28d9; }
 .b-familiare { background: var(--teal-100); color: var(--teal-800); }
+.b-pagata { background: var(--green-100); color: #15803d; }
+.b-da_pagare { background: var(--amber-100); color: #b45309; }
+.b-scaduta { background: var(--rose-100); color: #be123c; }
+.b-rateizzata { background: var(--blue-100); color: #1d4ed8; }
 [data-theme="dark"] .b-non_rilevante { background: var(--surface-2); }
 
 /* ---------- Tables ---------- */

@@ -25,8 +25,16 @@ soggetto e archivia.
   e aggiorna lo stato (`complete` / `needs_review` / `failed`).
 - **Strumenti dell'agente** (`app/agent/tools.py`): `list_household_members`,
   `find_existing_document` (anti-duplicazione), `save_document` (header),
-  `add_expenses` (righe/movimenti), `query_expenses`, `get_yearly_summary`.
-  Il dispatcher risolve i nomi soggetto→id e calcola l'anno fiscale.
+  `add_expenses` (righe/movimenti), `record_expense` (spesa da chat),
+  `save_bill`/`record_bill` (bollette di casa), `query_expenses`, `query_bills`,
+  `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e calcola l'anno
+  fiscale.
+- **Bollette / spese di casa** (`app/models/bill.py`, `app/services/bills.py`,
+  `app/api/bills.py`): riconoscimento bollette (luce, gas, acqua, rifiuti,
+  internet, condominio, ...), valutazione costi (consumi, costo unitario,
+  andamento) e amministrazione (scadenzario, stato pagamento). Quando un
+  documento è una bolletta l'agente usa `save_bill` invece di `add_expenses`,
+  per evitare doppi conteggi e abilitare l'analisi dedicata.
 - **Multi-utente**: ogni utente appartiene a un `Household`; tutti i dati sono
   scoping per `household_id`. Auth JWT (`app/deps.py`, `app/services/security.py`).
 - **Storage** (`app/services/storage.py`): `LocalStorage` su volume; S3 da fare.
@@ -43,8 +51,14 @@ soggetto e archivia.
 - `Expense`(household_id, document_id?, payer/beneficiary_user_id, purchase_date,
   merchant, description_original/normalized, merch_category, quantity, line_amount,
   discount, fiscal_classification, scope, fiscal_year, reliability_note).
+- `Bill`(household_id, document_id?, payer_user_id, utility_type, supplier,
+  service_id (POD/PDR/cliente), bill_number, period_start/end, issue_date,
+  due_date, total_amount + scomposizione (energy_cost/fixed_cost/taxes),
+  consumption_quantity/unit, status, paid_date, payment_method, fiscal_year,
+  notes). Per le bollette/spese di casa ricorrenti.
 - Enum salvati come VARCHAR (vedi `app/models/base.py:enum_col`).
-- Categorie merceologiche stabili in `app/enums.py:MERCHANDISE_CATEGORIES`.
+- Categorie merceologiche stabili in `app/enums.py:MERCHANDISE_CATEGORIES`;
+  tipi utenza/stato bolletta in `UtilityType`/`BillStatus`.
 
 ## Superficie API (`app/api`)
 - `auth`: `/auth/register` (nuovo nucleo+admin), `/auth/join`, `/auth/login`,
@@ -53,6 +67,8 @@ soggetto e archivia.
   (filtri), `GET /documents/{id}`, `GET /documents/{id}/file`,
   `POST /documents/{id}/reprocess`.
 - `expenses`: `GET/POST /expenses`, `PATCH /expenses/{id}` (correzione/verifica).
+- `bills`: `GET/POST /bills`, `GET/PATCH/DELETE /bills/{id}`,
+  `POST /bills/{id}/pay`, `/bills/overview|analysis|trend|upcoming|export.csv`.
 - `stats`: `/stats/by-category|by-member|by-scope|yearly|fiscal-summary`.
 - `chat`: `POST /chat` (agente conversazionale sullo storico).
 
