@@ -291,13 +291,42 @@ async function yearSelector(onChange) {
   return sel;
 }
 
-/* ---------- Charts ---------- */
+/* ---------- Drill-down (dashboard interattiva) ----------
+   I grafici e le KPI possono portare a una vista filtrata: ogni elemento
+   cliccabile porta con sé una "drill spec" (JSON) che descrive dove andare e
+   quali filtri applicare. bindDrills() la collega dopo il render. */
+function drillAttr(spec) { return spec ? ` data-drill='${esc(JSON.stringify(spec))}' role="button" tabindex="0"` : ""; }
+
+function applyDrill(spec) {
+  if (!spec) return;
+  if ("year" in spec) {
+    State.year = spec.year ? String(spec.year) : "";
+    localStorage.setItem("year", State.year);
+  }
+  if (spec.expenses) { expFilters = { ...defaultExpFilters(), ...spec.expenses }; }
+  if (spec.documents) { docFilters = { ...defaultDocFilters(), ...spec.documents }; }
+  if (spec.bills) { billFilters = { ...defaultBillFilters(), ...spec.bills }; }
+  navigate(spec.view || State.view);
+}
+
+function bindDrills(root) {
+  root.querySelectorAll("[data-drill]").forEach(el => {
+    el.classList.add("clickable");
+    const fire = () => { try { applyDrill(JSON.parse(el.dataset.drill)); } catch {} };
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+}
+
+/* ---------- Charts ----------
+   I `rows` possono includere una proprietà `drill` (drill spec): la barra o la
+   voce di legenda diventa cliccabile e porta alla vista filtrata. */
 function barChart(rows, { labelKey, valueKey, max }) {
   if (!rows.length) return `<div class="empty"><div class="big">📭</div><p>Nessun dato per il periodo selezionato.</p></div>`;
   const m = max || Math.max(...rows.map(r => r[valueKey]), 1);
   return rows.map((r, i) => `
-    <div class="bar-row">
-      <span class="lbl" title="${esc(r[labelKey])}">${esc(r[labelKey])}</span>
+    <div class="bar-row${r.drill ? " bar-clickable" : ""}"${drillAttr(r.drill)}${r.drill ? ` title="Apri: ${esc(r[labelKey])}"` : ` title="${esc(r[labelKey])}"`}>
+      <span class="lbl">${esc(r[labelKey])}</span>
       <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (r[valueKey] / m) * 100)}%;background:${PALETTE[i % PALETTE.length]}"></div></div>
       <span class="amt">${eur(r[valueKey])}</span>
     </div>`).join("");
@@ -310,16 +339,35 @@ function donut(rows, { labelKey, valueKey }) {
   const segs = rows.map((r, i) => {
     const frac = r[valueKey] / total;
     const dash = `${frac * C} ${C - frac * C}`;
-    const seg = `<circle r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"></circle>`;
+    const seg = `<circle class="${r.drill ? "seg-clickable" : ""}" r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"${drillAttr(r.drill)}></circle>`;
     off += frac; return seg;
   }).join("");
-  const legend = rows.map((r, i) => `<span><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r[labelKey])} · <b>${eur(r[valueKey])}</b></span>`).join("");
+  const legend = rows.map((r, i) => `<span class="${r.drill ? "leg-clickable" : ""}"${drillAttr(r.drill)}><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r[labelKey])} · <b>${eur(r[valueKey])}</b></span>`).join("");
   return `<div class="donut-wrap">
     <svg viewBox="0 0 180 180" width="180" height="180" style="flex-shrink:0">${segs}
       <text x="90" y="84" text-anchor="middle" font-size="13" fill="var(--text-faint)">Totale</text>
       <text x="90" y="104" text-anchor="middle" font-size="17" font-weight="800" fill="var(--text)">${eur(total)}</text>
     </svg>
     <div class="legend" style="flex-direction:column;gap:8px">${legend}</div></div>`;
+}
+
+/* ---------- KPI / card helpers (factoring estetico) ---------- */
+function kpiCard(k) {
+  return `<div class="card kpi${k.drill ? " kpi-clickable" : ""}"${drillAttr(k.drill)}${k.drill ? ` title="Apri dettaglio"` : ""}>
+      <div class="row between"><span class="label">${esc(k.label)}</span><span class="ico-box" style="background:${k.bg};color:${k.fg}">${k.icon}</span></div>
+      <span class="value">${k.value}</span><span class="delta">${esc(k.delta)}</span>
+      ${k.drill ? `<span class="kpi-go" aria-hidden="true">↗</span>` : ""}
+    </div>`;
+}
+function kpiGrid(kpis) { return `<div class="grid cols-4">${kpis.map(kpiCard).join("")}</div>`; }
+
+// Card "grafico" con intestazione coerente (titolo + azione opzionale).
+function chartCard(title, body, { action = "", sub = "", style = "" } = {}) {
+  return `<div class="card card-pad"${style ? ` style="${style}"` : ""}>
+      <div class="row between" style="margin-bottom:${sub ? "4" : "16"}px"><h3>${title}</h3>${action}</div>
+      ${sub ? `<p class="hint" style="margin-bottom:16px">${sub}</p>` : ""}
+      ${body}
+    </div>`;
 }
 
 /* ---------- View: Dashboard ---------- */
@@ -336,56 +384,49 @@ async function viewDashboard() {
     State._reviewCount = ov.to_review;
     updateReviewBadge(ov.to_review);
 
+    // Filtri di base condivisi dai drill-down: l'anno selezionato nella
+    // dashboard si propaga alle viste filtrate.
+    const yBase = State.year ? { fiscal_year: State.year } : {};
     const kpis = [
-      { label: "Totale spese", value: eur(ov.total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${ov.lines} moviment${ov.lines === 1 ? "o" : "i"} · ${ov.bills} bollett${ov.bills === 1 ? "a" : "e"}` },
-      { label: "Potenz. agevolabile", value: eur(ov.deductible_total), icon: "🏷️", bg: "var(--green-100)", fg: "#15803d", delta: "detraibile + deducibile" },
-      { label: "Documenti", value: ov.documents, icon: "🗂️", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "in archivio" },
-      { label: "Da rivedere", value: ov.to_review, icon: "🔎", bg: "var(--amber-100)", fg: "#b45309", delta: "richiedono verifica" },
+      { label: "Totale spese", value: eur(ov.total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${ov.lines} moviment${ov.lines === 1 ? "o" : "i"} · ${ov.bills} bollett${ov.bills === 1 ? "a" : "e"}`, drill: { view: "expenses", expenses: { ...yBase } } },
+      { label: "Potenz. agevolabile", value: eur(ov.deductible_total), icon: "🏷️", bg: "var(--green-100)", fg: "#15803d", delta: "detraibile + deducibile", drill: { view: "expenses", expenses: { ...yBase, fiscal_classification: "detraibile" } } },
+      { label: "Documenti", value: ov.documents, icon: "🗂️", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "in archivio", drill: { view: "documents", documents: { ...yBase } } },
+      { label: "Da rivedere", value: ov.to_review, icon: "🔎", bg: "var(--amber-100)", fg: "#b45309", delta: "richiedono verifica", drill: ov.to_review ? { view: "documents", documents: { ...yBase, status: "needs_review" } } : null },
     ];
-    const fiscalRows = fiscal.map(r => ({ label: FISCAL_LABELS[r.classification] || r.classification, total: r.total }));
+
+    // Righe dei grafici, ciascuna con la propria drill spec verso la vista filtrata.
+    const catRows = byCat.slice(0, 8).map(r => ({ label: r.category, total: r.total, drill: CATEGORIES.includes(r.category) ? { view: "expenses", expenses: { ...yBase, category: r.category } } : null }));
+    const fiscalRows = fiscal.filter(r => r.total > 0).map(r => ({ label: FISCAL_LABELS[r.classification] || r.classification, total: r.total, drill: { view: "expenses", expenses: { ...yBase, fiscal_classification: r.classification } } }));
+    const memberRows = byMember.map(r => {
+      const m = State.members.find(x => x.full_name === r.member);
+      return { label: r.member, total: r.total, drill: m ? { view: "expenses", expenses: { ...yBase, payer_user_id: m.id } } : null };
+    });
+    const scopeRows = byScope.map(r => ({ label: SCOPE_LABELS[r.scope] || r.scope, total: r.total, drill: { view: "expenses", expenses: { ...yBase, scope: r.scope } } })).filter(r => r.total > 0);
+    const yearRows = yearly.filter(y => y.year).map(r => ({ label: String(r.year), total: r.total, drill: { view: "dashboard", year: r.year } }));
 
     c.innerHTML = `
-      <div class="grid cols-4">${kpis.map(k => `
-        <div class="card kpi">
-          <div class="row between"><span class="label">${k.label}</span><span class="ico-box" style="background:${k.bg};color:${k.fg}">${k.icon}</span></div>
-          <span class="value">${k.value}</span><span class="delta">${k.delta}</span>
-        </div>`).join("")}
-      </div>
+      ${kpiGrid(kpis)}
 
-      ${ov.to_review ? `<div class="card card-pad" style="margin-top:16px;border-left:4px solid var(--amber-500);display:flex;gap:12px;align-items:center">
+      ${ov.to_review ? `<div class="card card-pad alert-bar" style="margin-top:16px;border-left:4px solid var(--amber-500)">
         <span style="font-size:22px">🔎</span>
         <div style="flex:1"><b>${ov.to_review} document${ov.to_review === 1 ? "o" : "i"} da rivedere</b><div class="sub" style="color:var(--text-soft);font-size:13px">Verifica attribuzione e classificazione fiscale prima dell'uso col commercialista.</div></div>
         <button class="btn btn-primary btn-sm" data-go="documents">Apri archivio</button>
       </div>` : ""}
 
       <div class="grid cols-2" style="margin-top:20px">
-        <div class="card card-pad">
-          <div class="row between" style="margin-bottom:16px"><h3>Spesa per categoria</h3></div>
-          ${barChart(byCat.slice(0, 8).map(r => ({ label: r.category, total: r.total })), { labelKey: "label", valueKey: "total" })}
-        </div>
-        <div class="card card-pad">
-          <div class="row between" style="margin-bottom:16px"><h3>Classificazione fiscale</h3></div>
-          ${donut(fiscalRows.filter(r => r.total > 0), { labelKey: "label", valueKey: "total" })}
-        </div>
+        ${chartCard("Spesa per categoria", barChart(catRows, { labelKey: "label", valueKey: "total" }))}
+        ${chartCard("Classificazione fiscale", donut(fiscalRows, { labelKey: "label", valueKey: "total" }))}
       </div>
 
       <div class="grid cols-2" style="margin-top:16px">
-        <div class="card card-pad">
-          <h3 style="margin-bottom:16px">Spesa per membro (pagante)</h3>
-          ${barChart(byMember.map(r => ({ label: r.member, total: r.total })), { labelKey: "label", valueKey: "total" })}
-        </div>
-        <div class="card card-pad">
-          <h3 style="margin-bottom:16px">Personale vs familiare</h3>
-          ${donut(byScope.map(r => ({ label: SCOPE_LABELS[r.scope] || r.scope, total: r.total })).filter(r => r.total > 0), { labelKey: "label", valueKey: "total" })}
-        </div>
+        ${chartCard("Spesa per membro (pagante)", barChart(memberRows, { labelKey: "label", valueKey: "total" }))}
+        ${chartCard("Personale vs familiare", donut(scopeRows, { labelKey: "label", valueKey: "total" }))}
       </div>
 
-      <div class="card card-pad" style="margin-top:16px">
-        <h3 style="margin-bottom:16px">Andamento per anno</h3>
-        ${barChart(yearly.filter(y => y.year).map(r => ({ label: String(r.year), total: r.total })), { labelKey: "label", valueKey: "total" })}
-      </div>`;
+      ${chartCard("Andamento per anno", barChart(yearRows, { labelKey: "label", valueKey: "total" }), { action: `<span class="hint">Clicca un anno per filtrare</span>`, style: "margin-top:16px" })}`;
 
     c.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => navigate(b.dataset.go)));
+    bindDrills(c);
   } catch (err) {
     c.innerHTML = errorBox(err.message);
   }
@@ -490,7 +531,8 @@ async function pollDocument(id, row, tries = 0) {
 }
 
 /* ---------- View: Documents ---------- */
-let docFilters = { fiscal_year: "", doc_type: "", status: "", q: "" };
+const defaultDocFilters = () => ({ fiscal_year: "", doc_type: "", status: "", q: "" });
+let docFilters = defaultDocFilters();
 async function viewDocuments() {
   const c = $("#content");
   c.innerHTML = `
@@ -508,7 +550,7 @@ async function viewDocuments() {
   $("#f-status").addEventListener("change", (e) => { docFilters.status = e.target.value; loadDocuments(); });
   $("#f-type").addEventListener("change", (e) => { docFilters.doc_type = e.target.value; loadDocuments(); });
   $("#f-year").addEventListener("input", (e) => { docFilters.fiscal_year = e.target.value; reload(); });
-  $("#reset-f").addEventListener("click", () => { docFilters = { fiscal_year: "", doc_type: "", status: "", q: "" }; viewDocuments(); });
+  $("#reset-f").addEventListener("click", () => { docFilters = defaultDocFilters(); viewDocuments(); });
   loadDocuments();
 }
 
@@ -609,14 +651,18 @@ async function openDocument(id) {
 }
 
 /* ---------- View: Expenses ---------- */
-let expFilters = { fiscal_year: "", category: "", scope: "", q: "" };
+const defaultExpFilters = () => ({ fiscal_year: "", category: "", scope: "", fiscal_classification: "", payer_user_id: "", q: "" });
+let expFilters = defaultExpFilters();
 async function viewExpenses() {
   const c = $("#content");
+  const memberOpts = Object.fromEntries(State.members.map(m => [m.id, m.full_name]));
   c.innerHTML = `
     <div class="filters">
       <div class="search-box"><span class="s-ico">🔍</span><input class="input" id="exp-q" placeholder="Cerca descrizione, negozio…" value="${esc(expFilters.q)}"></div>
       <select class="select" id="ef-cat">${optList({ "": "Tutte le categorie", ...Object.fromEntries(CATEGORIES.map(c => [c, c])) }, expFilters.category)}</select>
+      <select class="select" id="ef-fiscal">${optList({ "": "Tutte le classifiche", ...FISCAL_LABELS }, expFilters.fiscal_classification)}</select>
       <select class="select" id="ef-scope">${optList({ "": "Tutti gli ambiti", ...SCOPE_LABELS }, expFilters.scope)}</select>
+      <select class="select" id="ef-payer">${optList({ "": "Tutti i paganti", ...memberOpts }, expFilters.payer_user_id)}</select>
       <input class="input" id="ef-year" type="number" placeholder="Anno" style="width:110px" value="${esc(expFilters.fiscal_year)}">
       <button class="btn btn-ghost btn-sm" id="exp-reset">Azzera</button>
     </div>
@@ -624,9 +670,11 @@ async function viewExpenses() {
   const reload = debounce(loadExpenses, 250);
   $("#exp-q").addEventListener("input", (e) => { expFilters.q = e.target.value; reload(); });
   $("#ef-cat").addEventListener("change", (e) => { expFilters.category = e.target.value; loadExpenses(); });
+  $("#ef-fiscal").addEventListener("change", (e) => { expFilters.fiscal_classification = e.target.value; loadExpenses(); });
   $("#ef-scope").addEventListener("change", (e) => { expFilters.scope = e.target.value; loadExpenses(); });
+  $("#ef-payer").addEventListener("change", (e) => { expFilters.payer_user_id = e.target.value; loadExpenses(); });
   $("#ef-year").addEventListener("input", (e) => { expFilters.fiscal_year = e.target.value; reload(); });
-  $("#exp-reset").addEventListener("click", () => { expFilters = { fiscal_year: "", category: "", scope: "", q: "" }; viewExpenses(); });
+  $("#exp-reset").addEventListener("click", () => { expFilters = defaultExpFilters(); viewExpenses(); });
   loadExpenses();
 }
 
@@ -636,6 +684,8 @@ async function loadExpenses() {
   if (expFilters.fiscal_year) p.set("fiscal_year", expFilters.fiscal_year);
   if (expFilters.category) p.set("category", expFilters.category);
   if (expFilters.scope) p.set("scope", expFilters.scope);
+  if (expFilters.fiscal_classification) p.set("fiscal_classification", expFilters.fiscal_classification);
+  if (expFilters.payer_user_id) p.set("payer_user_id", expFilters.payer_user_id);
   try {
     let rows = await api(`/expenses?${p.toString()}`);
     if (expFilters.q) {
@@ -686,7 +736,8 @@ async function loadExpenses() {
 }
 
 /* ---------- View: Casa & Bollette ---------- */
-let billFilters = { utility_type: "", status: "" };
+const defaultBillFilters = () => ({ utility_type: "", status: "" });
+let billFilters = defaultBillFilters();
 async function viewBills() {
   const c = $("#content");
   c.innerHTML = skeletonGrid();
@@ -713,33 +764,27 @@ async function viewBills() {
     const utilCount = ov.utilities_count != null ? ov.utilities_count : ov.count;
     const kpis = [
       { label: "Bollette (utenze)", value: eur(utilTotal), icon: "💡", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${utilCount} bollett${utilCount === 1 ? "a" : "e"} · luce, gas, acqua…` },
-      { label: "Spese condominiali", value: eur(ov.condo_total || 0), icon: "🏢", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${ov.condo_count || 0} voc${(ov.condo_count || 0) === 1 ? "e" : "i"} di condominio` },
-      { label: "Da pagare", value: eur(ov.open_total), icon: "📨", bg: "var(--amber-100)", fg: "#b45309", delta: `${ov.open_count} apert${ov.open_count === 1 ? "a" : "e"}` },
-      { label: "Scadute", value: ov.overdue_count, icon: "⏰", bg: ov.overdue_count ? "var(--red-100, #fee2e2)" : "var(--blue-100)", fg: ov.overdue_count ? "#b91c1c" : "#1d4ed8", delta: "non pagate oltre scadenza" },
+      { label: "Spese condominiali", value: eur(ov.condo_total || 0), icon: "🏢", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${ov.condo_count || 0} voc${(ov.condo_count || 0) === 1 ? "e" : "i"} di condominio`, drill: (ov.condo_count || 0) ? { view: "bills", bills: { utility_type: "condominio" } } : null },
+      { label: "Da pagare", value: eur(ov.open_total), icon: "📨", bg: "var(--amber-100)", fg: "#b45309", delta: `${ov.open_count} apert${ov.open_count === 1 ? "a" : "e"}`, drill: ov.open_count ? { view: "bills", bills: { status: "da_pagare" } } : null },
+      { label: "Scadute", value: ov.overdue_count, icon: "⏰", bg: ov.overdue_count ? "var(--red-100, #fee2e2)" : "var(--blue-100)", fg: ov.overdue_count ? "#b91c1c" : "#1d4ed8", delta: "non pagate oltre scadenza", drill: ov.overdue_count ? { view: "bills", bills: { status: "scaduta" } } : null },
     ];
 
     const sched = renderSchedule(up);
-    // Nel grafico per tipo, distinguiamo visivamente le utenze dal condominio.
+    // Nel grafico per tipo, distinguiamo visivamente le utenze dal condominio;
+    // ogni barra filtra la lista bollette per quel tipo.
     const costRows = analysis.filter(r => r.total > 0).map(r => ({
       label: (r.utility_type === "condominio" ? "🏢 " : "") + (UTILITY_LABELS[r.utility_type] || r.utility_type),
       total: r.total,
+      drill: { view: "bills", bills: { utility_type: r.utility_type } },
     }));
 
     c.innerHTML = `
-      <div class="grid cols-4">${kpis.map(k => `
-        <div class="card kpi">
-          <div class="row between"><span class="label">${k.label}</span><span class="ico-box" style="background:${k.bg};color:${k.fg}">${k.icon}</span></div>
-          <span class="value">${k.value}</span><span class="delta">${k.delta}</span>
-        </div>`).join("")}
-      </div>
+      ${kpiGrid(kpis)}
 
       ${sched}
 
       <div class="grid cols-2" style="margin-top:16px">
-        <div class="card card-pad">
-          <h3 style="margin-bottom:16px">Costo per tipo di utenza</h3>
-          ${barChart(costRows, { labelKey: "label", valueKey: "total" })}
-        </div>
+        ${chartCard("Costo per tipo di utenza", barChart(costRows, { labelKey: "label", valueKey: "total" }))}
         <div class="card card-pad">
           <h3 style="margin-bottom:16px">Valutazione costi e consumi</h3>
           ${analysis.length ? `<div class="table-wrap"><table class="data">
@@ -763,8 +808,9 @@ async function viewBills() {
 
     $("#bf-utility").addEventListener("change", (e) => { billFilters.utility_type = e.target.value; loadBills(); });
     $("#bf-status").addEventListener("change", (e) => { billFilters.status = e.target.value; loadBills(); });
-    $("#bf-reset").addEventListener("click", () => { billFilters = { utility_type: "", status: "" }; viewBills(); });
+    $("#bf-reset").addEventListener("click", () => { billFilters = defaultBillFilters(); viewBills(); });
     c.querySelectorAll("[data-pay]").forEach(b => b.addEventListener("click", () => payBill(b.dataset.pay)));
+    bindDrills(c);
     loadBills();
   } catch (err) {
     c.innerHTML = errorBox(err.message);
