@@ -9,6 +9,7 @@ from app.agent.tools import TOOLS, AgentContext, dispatch, file_to_content_block
 from app.config import settings
 from app.enums import DocumentStatus, FiscalClassification
 from app.models.document import Document
+from app.services.embeddings import index_document
 from app.services.storage import get_storage
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -133,6 +134,11 @@ async def process_document(db: AsyncSession, document: Document) -> None:
                 else DocumentStatus.COMPLETE
             )
         await db.commit()
+        # Indicizzazione semantica (best-effort: non deve far fallire la pipeline).
+        try:
+            await index_document(db, document)
+        except Exception:
+            await db.rollback()
     except Exception as exc:
         await db.rollback()
         await db.refresh(document)

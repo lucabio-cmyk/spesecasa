@@ -20,6 +20,7 @@ from app.models.document import Document
 from app.models.expense import Expense
 from app.models.user import User
 from app.services import bills as bills_service
+from app.services import search as search_service
 from app.services import stats as stats_service
 from app.services.resolvers import (
     find_existing_document,
@@ -73,6 +74,25 @@ TOOLS = [
                 "issuer": {"type": "string"},
                 "total_amount": {"type": "number"},
             },
+        },
+    },
+    {
+        "name": "search_documents",
+        "description": (
+            "Cerca nei DOCUMENTI archiviati per SIGNIFICATO (ricerca semantica) oltre che per "
+            "parole chiave: utile per ritrovare un documento di cui non si ricordano gli "
+            "estremi esatti (es. 'la fattura del dentista dell'anno scorso', 'la polizza "
+            "auto', 'lo scontrino della farmacia'). Restituisce i documenti più pertinenti "
+            "con id, tipo, emittente, data, importo, sintesi e punteggio. Usalo per trovare "
+            "il document_id da passare poi a read_document quando serve aprire l'originale."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "cosa stai cercando, in linguaggio naturale"},
+                "limit": {"type": "integer", "description": "max risultati (default 10)"},
+            },
+            "required": ["query"],
         },
     },
     {
@@ -379,6 +399,28 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             if found:
                 return {"found": True, "document_id": str(found.id), "summary": found.summary}
             return {"found": False}
+
+        if name == "search_documents":
+            hits, mode = await search_service.search_documents(
+                db, ctx.household_id, tool_input.get("query", ""), tool_input.get("limit") or 10
+            )
+            return {
+                "mode": mode,
+                "count": len(hits),
+                "documents": [
+                    {
+                        "id": str(doc.id),
+                        "doc_type": str(doc.doc_type),
+                        "issuer": doc.issuer,
+                        "doc_date": doc.doc_date.isoformat() if doc.doc_date else None,
+                        "total_amount": str(doc.total_amount) if doc.total_amount is not None else None,
+                        "fiscal_year": doc.fiscal_year,
+                        "summary": doc.summary,
+                        "score": round(score, 4) if score is not None else None,
+                    }
+                    for doc, score in hits
+                ],
+            }
 
         if name == "read_document":
             raw_id = tool_input.get("document_id") or ctx.document_id

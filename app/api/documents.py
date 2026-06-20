@@ -12,8 +12,9 @@ from app.deps import DB, CurrentUser
 from app.enums import DocumentStatus, DocumentType
 from app.models.document import Document
 from app.models.expense import Expense
-from app.schemas.document import DocumentOut
+from app.schemas.document import DocumentOut, DocumentSearchHit
 from app.schemas.expense import ExpenseOut
+from app.services import search as search_service
 from app.services.storage import file_hash, get_storage
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -105,6 +106,27 @@ async def list_documents(
         stmt = stmt.where(Document.status == status)
     res = await db.execute(stmt)
     return list(res.scalars())
+
+
+@router.get("/search", response_model=list[DocumentSearchHit])
+async def search_documents(
+    user: CurrentUser,
+    db: DB,
+    response: Response,
+    q: str,
+    limit: int = 20,
+):
+    """Ricerca nell'archivio per significato (semantica, pgvector cosine) con
+    fallback automatico alle parole chiave. L'header `X-Search-Mode` indica la
+    modalità effettiva (`semantic` | `keyword` | `empty`)."""
+    hits, mode = await search_service.search_documents(db, user.household_id, q, limit)
+    response.headers["X-Search-Mode"] = mode
+    results: list[DocumentSearchHit] = []
+    for doc, score in hits:
+        hit = DocumentSearchHit.model_validate(doc)
+        hit.score = score
+        results.append(hit)
+    return results
 
 
 @router.get("/{document_id}", response_model=DocumentOut)

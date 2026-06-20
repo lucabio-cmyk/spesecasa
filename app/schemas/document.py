@@ -40,3 +40,10 @@ class DocumentOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class DocumentSearchHit(DocumentOut):
+    """Documento trovato dalla ricerca dell'archivio, con punteggio di
+    similarità (0..1) presente solo per i risultati semantici."""
+
+    score: float | None = None
