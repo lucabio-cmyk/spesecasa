@@ -425,6 +425,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                         "millesimi": str(u.millesimi) if u.millesimi is not None else None,
                         "is_primary": u.is_primary,
                         "notes": u.notes,
+                        "details": u.details,
                     }
                     for u in res.scalars()
                 ]

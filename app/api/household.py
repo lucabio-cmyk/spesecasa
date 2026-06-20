@@ -134,9 +134,12 @@ async def create_unit(body: PropertyUnitCreate, user: CurrentUser, db: DB):
             status.HTTP_403_FORBIDDEN, "Solo l'amministratore può gestire le unità"
         )
     unit = PropertyUnit(household_id=user.household_id, **body.model_dump(exclude_none=True))
-    db.add(unit)
+    # Azzera le altre principali PRIMA di aggiungere la nuova unità: così la
+    # query in _unset_other_primary (con il suo autoflush) non include questa
+    # unità e non ne resetta subito il flag is_primary appena impostato.
     if unit.is_primary:
         await _unset_other_primary(db, user.household_id, keep=None)
+    db.add(unit)
     await db.commit()
     await db.refresh(unit)
     return unit

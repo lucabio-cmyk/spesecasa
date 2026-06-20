@@ -75,19 +75,19 @@ async def resolve_unit_id(
     )
     units = list(res.scalars())
     # Cerca corrispondenza nei campi testuali (nome, alias, condominio,
-    # intestatario): un riscontro in uno qualsiasi basta a identificare l'unità.
+    # intestatario). Raccogli TUTTI i match: se più unità corrispondono,
+    # l'attribuzione è ambigua e restituiamo None (l'agente chiederà chiarimenti)
+    # per non collegare la spesa all'unità sbagliata.
+    matches = []
     for unit in units:
         haystack = " ".join(
             p.lower()
             for p in (unit.name, unit.aliases, unit.condominium_name, unit.owner_name)
             if p
         )
-        if needle in haystack or any(
-            part and part in needle
-            for part in (unit.name.lower(),)
-        ):
-            return unit.id
-    return None
+        if needle in haystack or unit.name.lower() in needle:
+            matches.append(unit.id)
+    return matches[0] if len(matches) == 1 else None
 
 
 async def find_existing_document(
