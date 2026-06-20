@@ -15,6 +15,7 @@ from app.models.expense import Expense
 from app.schemas.document import DocumentOut, DocumentSearchHit
 from app.schemas.expense import ExpenseOut
 from app.services import search as search_service
+from app.services.spreadsheets import normalize_mime
 from app.services.storage import file_hash, get_storage
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -67,11 +68,14 @@ async def upload_document(
     rel = f"{user.household_id}/{year}/{digest[:16]}_{safe_name}"
     path = get_storage().save(rel, data)
 
+    # Normalizza il MIME: alcuni browser inviano i fogli Excel come
+    # octet-stream; lo deduciamo dall'estensione per riconoscerli poi.
+    mime_type = normalize_mime(file.filename, file.content_type)
     doc = Document(
         household_id=user.household_id,
         uploaded_by_user_id=user.id,
         original_filename=file.filename or "documento",
-        mime_type=file.content_type or "application/octet-stream",
+        mime_type=mime_type,
         storage_path=path,
         file_hash=digest,
         status=DocumentStatus.PENDING,

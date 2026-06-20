@@ -23,6 +23,7 @@ from app.models.user import User
 from app.services import bills as bills_service
 from app.services import search as search_service
 from app.services import stats as stats_service
+from app.services.spreadsheets import is_spreadsheet, spreadsheet_to_text
 from app.services.resolvers import (
     find_existing_document,
     resolve_member_id,
@@ -35,12 +36,23 @@ from app.services.storage import get_storage
 
 def file_to_content_block(mime_type: str, data: bytes) -> dict:
     """Costruisce il blocco di contenuto (document/image) per passare un file
-    originale al modello. Usato sia in fase di upload sia da read_document."""
+    originale al modello. Usato sia in fase di upload sia da read_document.
+
+    I fogli di calcolo Excel (.xls/.xlsx), non leggibili nativamente dal
+    modello, vengono convertiti in un documento di testo (righe tab-separate)."""
+    if mime_type and mime_type.startswith("image/"):
+        b64 = base64.standard_b64encode(data).decode()
+        return {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}}
+    if mime_type != "application/pdf" and is_spreadsheet(mime_type, data):
+        text = spreadsheet_to_text(data, mime_type)
+        return {
+            "type": "document",
+            "source": {"type": "text", "media_type": "text/plain", "data": text},
+            "title": "Foglio di calcolo",
+        }
     b64 = base64.standard_b64encode(data).decode()
     if mime_type == "application/pdf":
         return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
-    if mime_type and mime_type.startswith("image/"):
-        return {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}}
     # fallback: prova come documento PDF
     return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
 

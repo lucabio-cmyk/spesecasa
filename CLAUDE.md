@@ -20,7 +20,9 @@ soggetto e archivia.
 
 ## Architettura
 - **Pipeline documento** (`app/agent/runner.py`): upload → salvataggio file →
-  `process_document` legge il file (blocco image/document base64) → loop tool-use
+  `process_document` legge il file (blocco image/document base64; i fogli Excel
+  .xls/.xlsx sono convertiti in testo da `app/services/spreadsheets.py` e passati
+  come documento di testo) → loop tool-use
   con Claude → il modello chiama gli strumenti per persistere → salva la sintesi
   e aggiorna lo stato (`complete` / `needs_review` / `failed`).
 - **Strumenti dell'agente** (`app/agent/tools.py`): `list_household_members`,
@@ -38,7 +40,11 @@ soggetto e archivia.
   internet, condominio, ...), valutazione costi (consumi, costo unitario,
   andamento) e amministrazione (scadenzario, stato pagamento). Quando un
   documento è una bolletta l'agente usa `save_bill` invece di `add_expenses`,
-  per evitare doppi conteggi e abilitare l'analisi dedicata.
+  per evitare doppi conteggi e abilitare l'analisi dedicata. Nella dashboard le
+  **spese condominiali** (`utility_type=condominio`) sono tenute distinte dalle
+  **bollette delle utenze**: `bills_service.overview` espone totali separati
+  (`utilities_total`/`condo_total`) e `stats.by_category` le mostra come due
+  categorie ("Bollette / utenze" e "Spese condominiali").
 - **Condominio, verbali di assemblea e unità immobiliari**
   (`app/models/property_unit.py`, sezione CONDOMINIO del system prompt, tool
   `list_property_units`): il nucleo configura le proprie unità immobiliari
