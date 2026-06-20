@@ -849,10 +849,10 @@ function viewChat() {
   const suggestions = [
     "Registra una spesa: 45€ in farmacia oggi",
     "Ieri 60€ di benzina pagati da me",
+    "Cancella la spesa di benzina di ieri",
     "Quanto ho speso in farmaci nel 2025?",
     "Quanto spendo di luce e gas? È aumentato?",
     "Quali bollette devo ancora pagare?",
-    "Riepilogo delle spese detraibili per soggetto",
   ];
   c.innerHTML = `
     <div class="card card-pad chat-wrap">

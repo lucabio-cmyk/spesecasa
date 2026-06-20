@@ -26,6 +26,7 @@ soggetto e archivia.
 - **Strumenti dell'agente** (`app/agent/tools.py`): `list_household_members`,
   `find_existing_document` (anti-duplicazione), `save_document` (header),
   `add_expenses` (righe/movimenti), `record_expense` (spesa da chat),
+  `find_expenses`/`delete_expense` (ricerca e cancellazione spesa da chat),
   `save_bill`/`record_bill` (bollette di casa), `query_expenses`, `query_bills`,
   `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e calcola l'anno
   fiscale.

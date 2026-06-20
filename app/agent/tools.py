@@ -1,7 +1,7 @@
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enums import (
@@ -242,6 +242,43 @@ TOOLS = [
         },
     },
     {
+        "name": "find_expenses",
+        "description": (
+            "Cerca SINGOLE spese/movimenti del nucleo (non aggregati) per individuarne una "
+            "da correggere o cancellare. Restituisce id, data, negozio, descrizione, importo, "
+            "categoria e se proviene da un documento. Filtri opzionali: testo (negozio/"
+            "descrizione), anno, categoria, data esatta. Usalo PRIMA di delete_expense per "
+            "trovare l'id corretto e per mostrare all'utente le candidate."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "testo cercato in negozio/descrizione"},
+                "fiscal_year": {"type": "integer"},
+                "category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
+                "purchase_date": {"type": "string", "description": "AAAA-MM-GG"},
+                "limit": {"type": "integer", "description": "max risultati (default 20)"},
+            },
+        },
+    },
+    {
+        "name": "delete_expense",
+        "description": (
+            "Cancella DEFINITIVAMENTE una spesa/movimento dato il suo id (ottenuto da "
+            "find_expenses). Operazione irreversibile: usala solo dopo aver individuato con "
+            "certezza la spesa e aver ricevuto conferma dall'utente. Se la spesa proviene da "
+            "un documento (from_document=true) avvisa l'utente che la cifra del documento "
+            "potrebbe non quadrare più, e procedi solo se confermato."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expense_id": {"type": "string", "description": "id della spesa da cancellare"},
+            },
+            "required": ["expense_id"],
+        },
+    },
+    {
         "name": "get_yearly_summary",
         "description": "Riepilogo annuale del nucleo: totale e ripartizione per classificazione fiscale; opzionalmente filtrato per soggetto.",
         "input_schema": {
@@ -410,6 +447,72 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 "fiscal_year": expense.fiscal_year,
                 "payer_user_id": str(expense.payer_user_id) if expense.payer_user_id else None,
             }
+
+        if name == "find_expenses":
+            stmt = (
+                select(Expense)
+                .where(Expense.household_id == ctx.household_id)
+                .order_by(Expense.purchase_date.desc().nullslast(), Expense.created_at.desc())
+            )
+            if tool_input.get("fiscal_year"):
+                stmt = stmt.where(Expense.fiscal_year == int(tool_input["fiscal_year"]))
+            if tool_input.get("category"):
+                stmt = stmt.where(Expense.merch_category == tool_input["category"])
+            pdate = to_date(tool_input.get("purchase_date"))
+            if pdate:
+                stmt = stmt.where(Expense.purchase_date == pdate)
+            needle = (tool_input.get("query") or "").strip().lower()
+            if needle:
+                like = f"%{needle}%"
+                stmt = stmt.where(
+                    func.lower(func.coalesce(Expense.merchant, ""))
+                    .concat(" ")
+                    .concat(func.lower(func.coalesce(Expense.description_normalized, "")))
+                    .concat(" ")
+                    .concat(func.lower(func.coalesce(Expense.description_original, "")))
+                    .like(like)
+                )
+            limit = int(tool_input.get("limit") or 20)
+            stmt = stmt.limit(max(1, min(limit, 50)))
+            res = await db.execute(stmt)
+            rows = list(res.scalars())
+            return {
+                "count": len(rows),
+                "expenses": [
+                    {
+                        "id": str(e.id),
+                        "purchase_date": e.purchase_date.isoformat() if e.purchase_date else None,
+                        "merchant": e.merchant,
+                        "description": e.description_normalized or e.description_original,
+                        "line_amount": str(e.line_amount),
+                        "merch_category": e.merch_category,
+                        "fiscal_classification": str(e.fiscal_classification),
+                        "from_document": e.document_id is not None,
+                    }
+                    for e in rows
+                ],
+            }
+
+        if name == "delete_expense":
+            raw_id = tool_input.get("expense_id")
+            try:
+                expense_id = uuid.UUID(str(raw_id))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "expense_id non valido"}
+            expense = await db.get(Expense, expense_id)
+            if not expense or expense.household_id != ctx.household_id:
+                return {"ok": False, "error": "spesa non trovata"}
+            snapshot = {
+                "id": str(expense.id),
+                "purchase_date": expense.purchase_date.isoformat() if expense.purchase_date else None,
+                "merchant": expense.merchant,
+                "description": expense.description_normalized or expense.description_original,
+                "line_amount": str(expense.line_amount),
+                "from_document": expense.document_id is not None,
+            }
+            await db.delete(expense)
+            await db.commit()
+            return {"ok": True, "deleted": snapshot}
 
         if name in ("save_bill", "record_bill"):
             doc_id = ctx.document_id if name == "save_bill" else None

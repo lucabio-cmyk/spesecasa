@@ -43,6 +43,27 @@ def test_default_units_for_metered_utilities():
     assert UTILITY_DEFAULT_UNIT["acqua"] == "m³"
 
 
+def test_expense_management_tools_exposed():
+    from app.agent.tools import TOOLS
+
+    names = {t.get("name") for t in TOOLS}
+    assert {"find_expenses", "delete_expense"} <= names
+
+
+def test_delete_expense_requires_id():
+    from app.agent.tools import TOOLS
+
+    tool = next(t for t in TOOLS if t["name"] == "delete_expense")
+    assert tool["input_schema"]["required"] == ["expense_id"]
+
+
+def test_system_prompt_covers_deletion():
+    from app.agent.system_prompt import SYSTEM_PROMPT
+
+    for kw in ("CANCELLAZIONE", "find_expenses", "delete_expense", "IRREVERSIBILE"):
+        assert kw in SYSTEM_PROMPT
+
+
 def test_fiscal_year_derivation_prefers_period_end():
     from app.api.bills import _derive_fiscal_year
     from app.models.bill import Bill
