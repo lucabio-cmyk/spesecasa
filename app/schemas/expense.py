@@ -17,11 +17,13 @@ class ExpenseBase(BaseModel):
     description_normalized: str | None = None
     merch_category: str | None = None
     quantity: Decimal | None = None
+    unit_price: Decimal | None = None
     line_amount: Decimal
     discount: Decimal | None = None
     fiscal_classification: FiscalClassification = FiscalClassification.NON_RILEVANTE
     scope: ExpenseScope = ExpenseScope.FAMILIARE
     fiscal_year: int | None = None
+    details: dict | None = None
     reliability_note: str | None = None
 
 

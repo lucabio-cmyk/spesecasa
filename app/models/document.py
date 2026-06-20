@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -61,6 +61,20 @@ class Document(Base, TimestampMixin):
     payment_method: Mapped[str | None] = mapped_column(String(100), nullable=True)
     document_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     fiscal_year: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+
+    # Dettagli estratti aggiuntivi (per un archivio più ricco e interrogabile)
+    issuer_vat: Mapped[str | None] = mapped_column(String(32), nullable=True)  # P.IVA/CF emittente
+    recipient_name: Mapped[str | None] = mapped_column(String(300), nullable=True)  # intestatario
+    recipient_fiscal_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    taxable_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)  # imponibile
+    vat_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)  # IVA
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)  # ISO 4217, default EUR
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)  # scadenza pagamento
+    payment_traceability: Mapped[str | None] = mapped_column(Text, nullable=True)  # rilevante per detraibilità
+    tags: Mapped[str | None] = mapped_column(String(500), nullable=True)  # parole chiave separate da virgola
+    # Dati strutturati liberi estratti dal documento (campi non previsti dallo
+    # schema: es. POD/PDR, IBAN, codice tributo F24, scomposizione voci, ecc.).
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     reliability_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)

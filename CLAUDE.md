@@ -24,12 +24,15 @@ soggetto e archivia.
   con Claude → il modello chiama gli strumenti per persistere → salva la sintesi
   e aggiorna lo stato (`complete` / `needs_review` / `failed`).
 - **Strumenti dell'agente** (`app/agent/tools.py`): `list_household_members`,
-  `find_existing_document` (anti-duplicazione), `save_document` (header),
-  `add_expenses` (righe/movimenti), `record_expense` (spesa da chat),
-  `find_expenses`/`delete_expense` (ricerca e cancellazione spesa da chat),
-  `save_bill`/`record_bill` (bollette di casa), `query_expenses`, `query_bills`,
-  `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e calcola l'anno
-  fiscale.
+  `find_existing_document` (anti-duplicazione), `read_document` (rilegge il file
+  originale archiviato — PDF/immagine — per analizzarlo di nuovo su richiesta),
+  `save_document` (header), `add_expenses` (righe/movimenti), `record_expense`
+  (spesa da chat), `find_expenses`/`delete_expense` (ricerca e cancellazione
+  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`,
+  `query_bills`, `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e
+  calcola l'anno fiscale. `read_document` restituisce il file come blocco
+  contenuto: il runner lo allega alla risposta dello strumento (chiave
+  `_content_blocks`) così il modello può vederlo subito.
 - **Bollette / spese di casa** (`app/models/bill.py`, `app/services/bills.py`,
   `app/api/bills.py`): riconoscimento bollette (luce, gas, acqua, rifiuti,
   internet, condominio, ...), valutazione costi (consumi, costo unitario,
@@ -39,8 +42,15 @@ soggetto e archivia.
 - **Multi-utente**: ogni utente appartiene a un `Household`; tutti i dati sono
   scoping per `household_id`. Auth JWT (`app/deps.py`, `app/services/security.py`).
 - **Storage** (`app/services/storage.py`): `LocalStorage` su volume; S3 da fare.
-- **Ricerca semantica**: colonna `embedding` (pgvector) predisposta, feature-flag
-  `ENABLE_SEMANTIC_SEARCH` (off di default). Wiring lato query da completare.
+- **Ricerca semantica** (`app/services/embeddings.py`, `app/services/search.py`):
+  l'embedding del documento (header + sintesi + voci) è calcolato a fine pipeline
+  (`index_document`) e salvato nella colonna `embedding` (pgvector, indice HNSW
+  cosine). `search_documents` cerca per similarità coseno con **fallback
+  automatico alle parole chiave** se la feature è off, il provider non è
+  configurato o nessun documento è ancora indicizzato. Esposta via endpoint
+  `GET /documents/search?q=` (header `X-Search-Mode`) e via tool agente
+  `search_documents`. Attivazione con `ENABLE_SEMANTIC_SEARCH=true` +
+  `VOYAGE_API_KEY` (off di default).
 
 ## Modello dati (`app/models`)
 - `Household`(id, name) 1—N `User`.
@@ -48,10 +58,13 @@ soggetto e archivia.
 - `Document`(household_id, uploaded_by/payer/beneficiary_user_id, doc_type, status,
   fiscal_classification, scope, file: original_filename/mime_type/storage_path/
   file_hash, header: doc_date/issuer/total_amount/payment_method/document_number/
-  fiscal_year, reliability_note, summary, retention_note, embedding) 1—N `Expense`.
+  fiscal_year, dettagli estesi: issuer_vat/recipient_name/recipient_fiscal_code/
+  taxable_amount/vat_amount/currency/due_date/payment_traceability/tags/details
+  (JSONB libero), reliability_note, summary, retention_note, embedding) 1—N `Expense`.
 - `Expense`(household_id, document_id?, payer/beneficiary_user_id, purchase_date,
-  merchant, description_original/normalized, merch_category, quantity, line_amount,
-  discount, fiscal_classification, scope, fiscal_year, reliability_note).
+  merchant, description_original/normalized, merch_category, quantity, unit_price,
+  line_amount, discount, fiscal_classification, scope, fiscal_year, details (JSONB
+  libero), reliability_note).
 - `Bill`(household_id, document_id?, payer_user_id, utility_type, supplier,
   service_id (POD/PDR/cliente), bill_number, period_start/end, issue_date,
   due_date, total_amount + scomposizione (energy_cost/fixed_cost/taxes),
@@ -65,7 +78,8 @@ soggetto e archivia.
 - `auth`: `/auth/register` (nuovo nucleo+admin), `/auth/join`, `/auth/login`,
   `/auth/me`.
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
-  (filtri), `GET /documents/{id}`, `GET /documents/{id}/file`,
+  (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
+  `GET /documents/{id}`, `GET /documents/{id}/file`,
   `POST /documents/{id}/reprocess`.
 - `expenses`: `GET/POST /expenses`, `PATCH /expenses/{id}` (correzione/verifica).
 - `bills`: `GET/POST /bills`, `GET/PATCH/DELETE /bills/{id}`,
@@ -90,8 +104,10 @@ Vedi `.env.example`. Minime per girare: `DATABASE_URL`, `ANTHROPIC_API_KEY`,
 3. **Ruoli e permessi**: admin vs member (chi può cancellare/modificare cosa).
 4. **Refresh token** e logout; rotazione segreti.
 5. **Backend S3** in `storage.py` (selezione via `STORAGE_BACKEND`).
-6. **Ricerca semantica**: calcolo embedding su `summary`/`description_normalized`
-   e endpoint `GET /documents/search?q=` (pgvector cosine + indice ivfflat/hnsw).
+6. ~~**Ricerca semantica**: calcolo embedding e endpoint `GET /documents/search?q=`
+   (pgvector cosine + indice HNSW).~~ FATTO (vedi Architettura). Da estendere:
+   embedding anche a livello di `Expense`/`Bill`, provider alternativi, re-index
+   batch dei documenti storici.
 7. **Export per commercialista**: CSV/PDF riepilogo annuale per soggetto e per
    classificazione (potenziali detraibili/deducibili) — solo aggregazione dati,
    nessun calcolo d'imposta.

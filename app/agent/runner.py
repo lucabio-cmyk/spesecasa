@@ -1,4 +1,3 @@
-import base64
 import json
 from datetime import date
 
@@ -6,10 +5,11 @@ from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.system_prompt import SYSTEM_PROMPT
-from app.agent.tools import TOOLS, AgentContext, dispatch
+from app.agent.tools import TOOLS, AgentContext, dispatch, file_to_content_block
 from app.config import settings
 from app.enums import DocumentStatus, FiscalClassification
 from app.models.document import Document
+from app.services.embeddings import index_document
 from app.services.storage import get_storage
 
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -35,16 +35,6 @@ def _build_tools() -> list[dict]:
     return tools
 
 
-def _file_block(mime_type: str, data: bytes) -> dict:
-    b64 = base64.standard_b64encode(data).decode()
-    if mime_type == "application/pdf":
-        return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
-    if mime_type.startswith("image/"):
-        return {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}}
-    # fallback: prova come documento PDF
-    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
-
-
 async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -> str:
     tools = _build_tools()
     system_text = f"{SYSTEM_PROMPT}\n\nData odierna: {date.today().isoformat()}."
@@ -59,6 +49,9 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
         )
 
         tool_results: list[dict] = []
+        # Blocchi file (PDF/immagine) da allegare alla risposta degli strumenti,
+        # es. quando read_document rilegge un originale per l'analisi.
+        extra_blocks: list[dict] = []
         turn_text = ""
         for block in resp.content:
             if block.type == "text":
@@ -69,6 +62,7 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
                 if block.name == "web_search":
                     continue
                 result = await dispatch(block.name, block.input, db, ctx)
+                blocks = result.pop("_content_blocks", None) if isinstance(result, dict) else None
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -76,6 +70,8 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
                         "content": json.dumps(result, default=str, ensure_ascii=False),
                     }
                 )
+                if blocks:
+                    extra_blocks.extend(blocks)
             # I blocchi server-side (server_tool_use / web_search_tool_result)
             # sono gestiti da Anthropic: vanno solo conservati nella history.
 
@@ -85,7 +81,9 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
             final_text = turn_text
 
         if tool_results:
-            messages.append({"role": "user", "content": tool_results})
+            # I file allegati (extra_blocks) seguono i tool_result nello stesso turno
+            # utente, così il modello può analizzarli subito.
+            messages.append({"role": "user", "content": tool_results + extra_blocks})
             continue
         if resp.stop_reason == "pause_turn":
             # Turno messo in pausa (es. ricerca web lunga): si prosegue.
@@ -109,16 +107,21 @@ async def process_document(db: AsyncSession, document: Document) -> None:
         )
         instruction = (
             "Elabora il documento allegato. Passi: 1) usa list_household_members per "
-            "conoscere i membri del nucleo; 2) identifica il tipo ed estrai i dati; "
-            "3) usa find_existing_document per evitare duplicati; 4) classifica "
-            "fiscalmente e attribuisci soggetto pagante/beneficiario/ambito; 5) salva "
-            "l'header con save_document e le righe con add_expenses; se è una BOLLETTA/spesa "
-            "di casa (luce, gas, acqua, rifiuti, internet, condominio, ...) usa invece "
-            "save_bill estraendo periodo, scadenza, consumo e costo; 6) concludi con una "
-            "sintesi pratica in italiano. Non inventare soglie o percentuali."
+            "conoscere i membri del nucleo; 2) identifica il tipo ed estrai TUTTI i dati "
+            "utili realmente presenti: data, emittente e sua P.IVA/CF, intestatario e suo "
+            "codice fiscale, numero documento, importo totale, imponibile e IVA, valuta, "
+            "modalità e tracciabilità del pagamento, scadenza; metti gli altri dati utili "
+            "non previsti dai campi (IBAN, POD/PDR, codice tributo F24, periodo, ecc.) in "
+            "'details', e aggiungi parole chiave in 'tags'; 3) usa find_existing_document "
+            "per evitare duplicati; 4) classifica fiscalmente e attribuisci soggetto "
+            "pagante/beneficiario/ambito; 5) salva l'header con save_document e le righe con "
+            "add_expenses; se è una BOLLETTA/spesa di casa (luce, gas, acqua, rifiuti, "
+            "internet, condominio, ...) usa invece save_bill estraendo periodo, scadenza, "
+            "consumo e costo; 6) concludi con una sintesi pratica in italiano. Non inventare "
+            "dati assenti né soglie o percentuali; lascia vuoti i campi non leggibili."
         )
         messages = [
-            {"role": "user", "content": [_file_block(document.mime_type, data), {"type": "text", "text": instruction}]}
+            {"role": "user", "content": [file_to_content_block(document.mime_type, data), {"type": "text", "text": instruction}]}
         ]
         summary = await _run_loop(db, ctx, messages)
 
@@ -131,6 +134,12 @@ async def process_document(db: AsyncSession, document: Document) -> None:
                 else DocumentStatus.COMPLETE
             )
         await db.commit()
+        # Indicizzazione semantica (best-effort: non deve far fallire la pipeline).
+        try:
+            if await index_document(db, document):
+                await db.commit()
+        except Exception:
+            await db.rollback()
     except Exception as exc:
         await db.rollback()
         await db.refresh(document)
