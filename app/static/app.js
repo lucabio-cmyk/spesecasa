@@ -395,7 +395,15 @@ async function viewDashboard() {
     ];
 
     // Righe dei grafici, ciascuna con la propria drill spec verso la vista filtrata.
-    const catRows = byCat.slice(0, 8).map(r => ({ label: r.category, total: r.total, drill: CATEGORIES.includes(r.category) ? { view: "expenses", expenses: { ...yBase, category: r.category } } : null }));
+    // Le categorie aggregate (bollette/condominio) provengono dal backend e
+    // portano alla vista bollette; le altre categorie valide filtrano le spese.
+    const catRows = byCat.slice(0, 8).map(r => {
+      let drill = null;
+      if (r.category === "Bollette / utenze") drill = { view: "bills" };
+      else if (r.category === "Spese condominiali") drill = { view: "bills", bills: { utility_type: "condominio" } };
+      else if (r.category && r.category !== "n/d") drill = { view: "expenses", expenses: { ...yBase, category: r.category } };
+      return { label: r.category, total: r.total, drill };
+    });
     const fiscalRows = fiscal.filter(r => r.total > 0).map(r => ({ label: FISCAL_LABELS[r.classification] || r.classification, total: r.total, drill: { view: "expenses", expenses: { ...yBase, fiscal_classification: r.classification } } }));
     const memberRows = byMember.map(r => {
       const m = State.members.find(x => x.full_name === r.member);
