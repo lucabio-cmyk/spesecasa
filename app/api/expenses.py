@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.deps import DB, CurrentUser
-from app.enums import ExpenseScope
+from app.enums import ExpenseScope, FiscalClassification
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
 
@@ -18,6 +18,8 @@ async def list_expenses(
     fiscal_year: int | None = None,
     category: str | None = None,
     scope: ExpenseScope | None = None,
+    fiscal_classification: FiscalClassification | None = None,
+    payer_user_id: uuid.UUID | None = None,
 ):
     stmt = (
         select(Expense)
@@ -30,6 +32,10 @@ async def list_expenses(
         stmt = stmt.where(Expense.merch_category == category)
     if scope:
         stmt = stmt.where(Expense.scope == scope)
+    if fiscal_classification:
+        stmt = stmt.where(Expense.fiscal_classification == fiscal_classification)
+    if payer_user_id:
+        stmt = stmt.where(Expense.payer_user_id == payer_user_id)
     res = await db.execute(stmt)
     return list(res.scalars())
 
