@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.enums import ExpenseScope, FiscalClassification
@@ -42,6 +42,7 @@ class Expense(Base, TimestampMixin):
     merch_category: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True)
 
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     line_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     discount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
 
@@ -53,5 +54,7 @@ class Expense(Base, TimestampMixin):
     )
     fiscal_year: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     reliability_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Dati strutturati liberi della riga (es. lotto, scadenza prodotto, aliquota IVA).
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     document: Mapped["Document | None"] = relationship(back_populates="expenses")

@@ -1,3 +1,4 @@
+import base64
 import uuid
 from dataclasses import dataclass
 
@@ -26,6 +27,19 @@ from app.services.resolvers import (
     to_date,
     to_decimal,
 )
+from app.services.storage import get_storage
+
+
+def file_to_content_block(mime_type: str, data: bytes) -> dict:
+    """Costruisce il blocco di contenuto (document/image) per passare un file
+    originale al modello. Usato sia in fase di upload sia da read_document."""
+    b64 = base64.standard_b64encode(data).decode()
+    if mime_type == "application/pdf":
+        return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
+    if mime_type and mime_type.startswith("image/"):
+        return {"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": b64}}
+    # fallback: prova come documento PDF
+    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
 
 _FISCAL = [c.value for c in FiscalClassification]
 _SCOPE = [s.value for s in ExpenseScope]
@@ -62,22 +76,61 @@ TOOLS = [
         },
     },
     {
+        "name": "read_document",
+        "description": (
+            "Apri e RILEGGI il file originale (PDF/immagine) di un documento già archiviato "
+            "per analizzarlo di nuovo: rileggere righe e importi, estrarre dettagli non ancora "
+            "salvati, o rispondere a una domanda dell'utente sul contenuto del documento. "
+            "Indica document_id (ottenuto da find_existing_document/find_expenses, dalla lista "
+            "documenti, o indicato dall'utente); in fase di elaborazione di un upload puoi "
+            "ometterlo per rileggere il documento corrente. Usalo solo quando serve davvero "
+            "guardare l'originale: il file verrà allegato come contenuto nella risposta dello "
+            "strumento. Dopo averlo letto, se aggiorni dei dati persistili con save_document/"
+            "add_expenses/save_bill."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "string", "description": "id del documento da rileggere (opzionale durante l'elaborazione di un upload)"},
+            },
+        },
+    },
+    {
         "name": "save_document",
-        "description": "Salva/aggiorna i metadati (header) del documento in elaborazione: tipo, data, emittente, importo, classificazione fiscale, attribuzione e stato.",
+        "description": (
+            "Salva/aggiorna i metadati (header) del documento in elaborazione: tipo, data, "
+            "emittente, importi, classificazione fiscale, attribuzione e stato. Estrai e "
+            "conserva quanti più dati possibile tra quelli realmente presenti sul documento "
+            "(non inventarli): partita IVA/CF dell'emittente, intestatario e suo codice "
+            "fiscale, imponibile e IVA, valuta, scadenza di pagamento, tracciabilità del "
+            "pagamento. Per qualunque altro dato utile non previsto dai campi (es. IBAN, "
+            "POD/PDR, codice tributo F24, numero pratica, targa, periodo di competenza) usa "
+            "il campo libero 'details' come oggetto chiave→valore."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "doc_type": {"type": "string", "enum": _DOC_TYPE},
                 "doc_date": {"type": "string", "description": "AAAA-MM-GG"},
-                "issuer": {"type": "string"},
-                "total_amount": {"type": "number"},
+                "issuer": {"type": "string", "description": "nome dell'emittente/negozio"},
+                "issuer_vat": {"type": "string", "description": "partita IVA o codice fiscale dell'emittente"},
+                "recipient_name": {"type": "string", "description": "intestatario del documento (a chi è intestato)"},
+                "recipient_fiscal_code": {"type": "string", "description": "codice fiscale dell'intestatario"},
+                "total_amount": {"type": "number", "description": "importo totale (lordo)"},
+                "taxable_amount": {"type": "number", "description": "imponibile (al netto IVA)"},
+                "vat_amount": {"type": "number", "description": "importo IVA"},
+                "currency": {"type": "string", "description": "valuta ISO, es. EUR (default EUR)"},
                 "payment_method": {"type": "string"},
+                "payment_traceability": {"type": "string", "description": "nota su tracciabilità del pagamento (carta/bonifico vs contanti): incide sulla detraibilità"},
                 "document_number": {"type": "string"},
+                "due_date": {"type": "string", "description": "scadenza di pagamento AAAA-MM-GG (fatture/F24/avvisi)"},
                 "fiscal_year": {"type": "integer"},
                 "fiscal_classification": {"type": "string", "enum": _FISCAL},
                 "scope": {"type": "string", "enum": _SCOPE},
                 "payer": {"type": "string", "description": "nome o id del soggetto pagante"},
                 "beneficiary": {"type": "string", "description": "nome o id del beneficiario"},
+                "tags": {"type": "string", "description": "parole chiave separate da virgola (es. 'farmacia, ticket, dentista')"},
+                "details": {"type": "object", "description": "dati strutturati aggiuntivi presenti sul documento (chiave→valore)"},
                 "reliability_note": {"type": "string"},
                 "retention_note": {"type": "string"},
                 "status": {"type": "string", "enum": [s.value for s in DocumentStatus]},
@@ -101,6 +154,7 @@ TOOLS = [
                             "description_normalized": {"type": "string"},
                             "merch_category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
                             "quantity": {"type": "number"},
+                            "unit_price": {"type": "number", "description": "prezzo unitario, se indicato"},
                             "line_amount": {"type": "number"},
                             "discount": {"type": "number"},
                             "fiscal_classification": {"type": "string", "enum": _FISCAL},
@@ -108,6 +162,7 @@ TOOLS = [
                             "payer": {"type": "string"},
                             "beneficiary": {"type": "string"},
                             "fiscal_year": {"type": "integer"},
+                            "details": {"type": "object", "description": "dati aggiuntivi della riga (es. aliquota IVA, reparto, codice prodotto)"},
                             "reliability_note": {"type": "string"},
                         },
                         "required": ["line_amount"],
@@ -129,6 +184,7 @@ TOOLS = [
                 "description_normalized": {"type": "string", "description": "descrizione chiara e sintetica"},
                 "merch_category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
                 "quantity": {"type": "number"},
+                "unit_price": {"type": "number", "description": "prezzo unitario, se indicato"},
                 "line_amount": {"type": "number"},
                 "discount": {"type": "number"},
                 "fiscal_classification": {"type": "string", "enum": _FISCAL},
@@ -136,6 +192,7 @@ TOOLS = [
                 "payer": {"type": "string", "description": "nome o id del soggetto pagante"},
                 "beneficiary": {"type": "string", "description": "nome o id del beneficiario"},
                 "fiscal_year": {"type": "integer"},
+                "details": {"type": "object", "description": "dati aggiuntivi della spesa (chiave→valore)"},
                 "reliability_note": {"type": "string"},
             },
             "required": ["line_amount"],
@@ -323,6 +380,33 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 return {"found": True, "document_id": str(found.id), "summary": found.summary}
             return {"found": False}
 
+        if name == "read_document":
+            raw_id = tool_input.get("document_id") or ctx.document_id
+            if not raw_id:
+                return {"ok": False, "error": "nessun document_id indicato"}
+            try:
+                doc_id = uuid.UUID(str(raw_id))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "document_id non valido"}
+            doc = await db.get(Document, doc_id)
+            if not doc or doc.household_id != ctx.household_id:
+                return {"ok": False, "error": "documento non trovato"}
+            try:
+                data = get_storage().read(doc.storage_path)
+            except Exception as exc:
+                return {"ok": False, "error": f"impossibile leggere il file originale: {exc}"}
+            # Il blocco file (PDF/immagine) viene allegato dal runner alla risposta
+            # dello strumento tramite la chiave speciale _content_blocks.
+            return {
+                "ok": True,
+                "document_id": str(doc.id),
+                "original_filename": doc.original_filename,
+                "mime_type": doc.mime_type,
+                "doc_type": str(doc.doc_type),
+                "note": "File originale allegato di seguito: analizzalo per rispondere o per estrarre nuovi dettagli.",
+                "_content_blocks": [file_to_content_block(doc.mime_type, data)],
+            }
+
         if name == "save_document":
             if not ctx.document_id:
                 return {"ok": False, "error": "nessun documento in elaborazione"}
@@ -339,9 +423,22 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 doc.status = DocumentStatus(tool_input["status"])
             doc.doc_date = to_date(tool_input.get("doc_date")) or doc.doc_date
             doc.issuer = tool_input.get("issuer", doc.issuer)
+            doc.issuer_vat = tool_input.get("issuer_vat", doc.issuer_vat)
+            doc.recipient_name = tool_input.get("recipient_name", doc.recipient_name)
+            doc.recipient_fiscal_code = tool_input.get("recipient_fiscal_code", doc.recipient_fiscal_code)
             doc.total_amount = to_decimal(tool_input.get("total_amount")) or doc.total_amount
+            doc.taxable_amount = to_decimal(tool_input.get("taxable_amount")) or doc.taxable_amount
+            doc.vat_amount = to_decimal(tool_input.get("vat_amount")) or doc.vat_amount
+            doc.currency = tool_input.get("currency", doc.currency)
             doc.payment_method = tool_input.get("payment_method", doc.payment_method)
+            doc.payment_traceability = tool_input.get("payment_traceability", doc.payment_traceability)
             doc.document_number = tool_input.get("document_number", doc.document_number)
+            doc.due_date = to_date(tool_input.get("due_date")) or doc.due_date
+            doc.tags = tool_input.get("tags", doc.tags)
+            new_details = tool_input.get("details")
+            if isinstance(new_details, dict) and new_details:
+                # merge non distruttivo: conserva dettagli già estratti in passate precedenti
+                doc.details = {**(doc.details or {}), **new_details}
             doc.reliability_note = tool_input.get("reliability_note", doc.reliability_note)
             doc.retention_note = tool_input.get("retention_note", doc.retention_note)
             if tool_input.get("fiscal_year"):
@@ -391,6 +488,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                     description_normalized=line.get("description_normalized"),
                     merch_category=line.get("merch_category"),
                     quantity=to_decimal(line.get("quantity")),
+                    unit_price=to_decimal(line.get("unit_price")),
                     line_amount=amount,
                     discount=to_decimal(line.get("discount")),
                     fiscal_classification=FiscalClassification(
@@ -398,6 +496,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                     ),
                     scope=ExpenseScope(line.get("scope", ExpenseScope.FAMILIARE.value)),
                     fiscal_year=fyear,
+                    details=line.get("details") if isinstance(line.get("details"), dict) else None,
                     reliability_note=line.get("reliability_note"),
                 )
                 db.add(expense)
@@ -428,6 +527,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 description_normalized=tool_input.get("description_normalized"),
                 merch_category=tool_input.get("merch_category"),
                 quantity=to_decimal(tool_input.get("quantity")),
+                unit_price=to_decimal(tool_input.get("unit_price")),
                 line_amount=amount,
                 discount=to_decimal(tool_input.get("discount")),
                 fiscal_classification=FiscalClassification(
@@ -435,6 +535,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 ),
                 scope=ExpenseScope(tool_input.get("scope", ExpenseScope.FAMILIARE.value)),
                 fiscal_year=fyear,
+                details=tool_input.get("details") if isinstance(tool_input.get("details"), dict) else None,
                 reliability_note=tool_input.get("reliability_note"),
             )
             db.add(expense)

@@ -24,12 +24,15 @@ soggetto e archivia.
   con Claude → il modello chiama gli strumenti per persistere → salva la sintesi
   e aggiorna lo stato (`complete` / `needs_review` / `failed`).
 - **Strumenti dell'agente** (`app/agent/tools.py`): `list_household_members`,
-  `find_existing_document` (anti-duplicazione), `save_document` (header),
-  `add_expenses` (righe/movimenti), `record_expense` (spesa da chat),
-  `find_expenses`/`delete_expense` (ricerca e cancellazione spesa da chat),
-  `save_bill`/`record_bill` (bollette di casa), `query_expenses`, `query_bills`,
-  `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e calcola l'anno
-  fiscale.
+  `find_existing_document` (anti-duplicazione), `read_document` (rilegge il file
+  originale archiviato — PDF/immagine — per analizzarlo di nuovo su richiesta),
+  `save_document` (header), `add_expenses` (righe/movimenti), `record_expense`
+  (spesa da chat), `find_expenses`/`delete_expense` (ricerca e cancellazione
+  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`,
+  `query_bills`, `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e
+  calcola l'anno fiscale. `read_document` restituisce il file come blocco
+  contenuto: il runner lo allega alla risposta dello strumento (chiave
+  `_content_blocks`) così il modello può vederlo subito.
 - **Bollette / spese di casa** (`app/models/bill.py`, `app/services/bills.py`,
   `app/api/bills.py`): riconoscimento bollette (luce, gas, acqua, rifiuti,
   internet, condominio, ...), valutazione costi (consumi, costo unitario,
@@ -48,10 +51,13 @@ soggetto e archivia.
 - `Document`(household_id, uploaded_by/payer/beneficiary_user_id, doc_type, status,
   fiscal_classification, scope, file: original_filename/mime_type/storage_path/
   file_hash, header: doc_date/issuer/total_amount/payment_method/document_number/
-  fiscal_year, reliability_note, summary, retention_note, embedding) 1—N `Expense`.
+  fiscal_year, dettagli estesi: issuer_vat/recipient_name/recipient_fiscal_code/
+  taxable_amount/vat_amount/currency/due_date/payment_traceability/tags/details
+  (JSONB libero), reliability_note, summary, retention_note, embedding) 1—N `Expense`.
 - `Expense`(household_id, document_id?, payer/beneficiary_user_id, purchase_date,
-  merchant, description_original/normalized, merch_category, quantity, line_amount,
-  discount, fiscal_classification, scope, fiscal_year, reliability_note).
+  merchant, description_original/normalized, merch_category, quantity, unit_price,
+  line_amount, discount, fiscal_classification, scope, fiscal_year, details (JSONB
+  libero), reliability_note).
 - `Bill`(household_id, document_id?, payer_user_id, utility_type, supplier,
   service_id (POD/PDR/cliente), bill_number, period_start/end, issue_date,
   due_date, total_amount + scomposizione (energy_cost/fixed_cost/taxes),
