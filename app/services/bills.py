@@ -12,7 +12,10 @@ _OPEN_STATUSES = ("da_pagare", "scaduta", "rateizzata")
 
 
 async def cost_analysis(
-    db: AsyncSession, household_id: uuid.UUID, year: int | None = None
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    year: int | None = None,
+    unit_id: uuid.UUID | None = None,
 ) -> list[dict]:
     """Valutazione costi per tipo di utenza: totale, n. bollette, importo medio,
     consumo totale e costo unitario medio (€/unità) quando il consumo è noto."""
@@ -31,6 +34,8 @@ async def cost_analysis(
     )
     if year:
         stmt = stmt.where(Bill.fiscal_year == year)
+    if unit_id:
+        stmt = stmt.where(Bill.property_unit_id == unit_id)
     res = await db.execute(stmt)
     out = []
     for utype, total, count, avg, consumption, unit in res.all():
@@ -56,6 +61,7 @@ async def trend(
     household_id: uuid.UUID,
     utility_type: str | None = None,
     year: int | None = None,
+    unit_id: uuid.UUID | None = None,
 ) -> list[dict]:
     """Andamento dei costi nel tempo, per anno fiscale e tipo di utenza.
     Utile a confrontare i periodi e individuare rincari o consumi anomali."""
@@ -75,6 +81,8 @@ async def trend(
         stmt = stmt.where(Bill.utility_type == utility_type)
     if year:
         stmt = stmt.where(Bill.fiscal_year == year)
+    if unit_id:
+        stmt = stmt.where(Bill.property_unit_id == unit_id)
     res = await db.execute(stmt)
     return [
         {
@@ -89,7 +97,10 @@ async def trend(
 
 
 async def upcoming(
-    db: AsyncSession, household_id: uuid.UUID, limit: int = 50
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    limit: int = 50,
+    unit_id: uuid.UUID | None = None,
 ) -> dict:
     """Scadenzario: bollette non saldate, separando le scadute da quelle in
     arrivo. Cuore della parte amministrativa."""
@@ -103,6 +114,8 @@ async def upcoming(
         .order_by(Bill.due_date.asc().nullslast())
         .limit(limit)
     )
+    if unit_id:
+        stmt = stmt.where(Bill.property_unit_id == unit_id)
     res = await db.execute(stmt)
     bills = list(res.scalars())
     overdue, due_soon = [], []

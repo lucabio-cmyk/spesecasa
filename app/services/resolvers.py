@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
+from app.models.property_unit import PropertyUnit
 from app.models.user import User
 
 
@@ -47,6 +48,45 @@ async def resolve_member_id(
     for user in res.scalars():
         if needle and needle in user.full_name.lower():
             return user.id
+    return None
+
+
+async def resolve_unit_id(
+    db: AsyncSession, household_id: uuid.UUID, name_or_id
+) -> uuid.UUID | None:
+    """Risolve un'unità immobiliare del nucleo da uuid, nome, alias, nome del
+    condominio o intestatario (match parziale, case-insensitive). Restituisce
+    None se l'indicazione è assente o ambigua/non trovata."""
+    if not name_or_id:
+        return None
+    # Prova come UUID esatto.
+    try:
+        candidate = uuid.UUID(str(name_or_id))
+        unit = await db.get(PropertyUnit, candidate)
+        if unit and unit.household_id == household_id:
+            return unit.id
+    except (ValueError, AttributeError):
+        pass
+    needle = str(name_or_id).strip().lower()
+    if not needle:
+        return None
+    res = await db.execute(
+        select(PropertyUnit).where(PropertyUnit.household_id == household_id)
+    )
+    units = list(res.scalars())
+    # Cerca corrispondenza nei campi testuali (nome, alias, condominio,
+    # intestatario): un riscontro in uno qualsiasi basta a identificare l'unità.
+    for unit in units:
+        haystack = " ".join(
+            p.lower()
+            for p in (unit.name, unit.aliases, unit.condominium_name, unit.owner_name)
+            if p
+        )
+        if needle in haystack or any(
+            part and part in needle
+            for part in (unit.name.lower(),)
+        ):
+            return unit.id
     return None
 
 

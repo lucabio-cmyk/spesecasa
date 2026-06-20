@@ -39,6 +39,24 @@ soggetto e archivia.
   andamento) e amministrazione (scadenzario, stato pagamento). Quando un
   documento è una bolletta l'agente usa `save_bill` invece di `add_expenses`,
   per evitare doppi conteggi e abilitare l'analisi dedicata.
+- **Condominio, verbali di assemblea e unità immobiliari**
+  (`app/models/property_unit.py`, sezione CONDOMINIO del system prompt, tool
+  `list_property_units`): il nucleo configura le proprie unità immobiliari
+  (nome, indirizzo, alias di riconoscimento — interno/scala/subalterno/codice
+  condòmino/intestatario —, condominio, millesimi, unità principale). L'agente
+  le legge con `list_property_units` per attribuire le spese di condominio
+  all'unità corretta. Per i verbali (`doc_type=verbale_assemblea`) fa un'analisi
+  approfondita (deliberazioni, riparto, lavori, fondo, rate e scadenze) salvando
+  i dettagli in `Bill.details` e collegando l'unità (`Bill.property_unit_id`).
+  Se il documento cita più unità ed è ambiguo: in chat chiede a quale unità
+  riferirsi; in upload (no domande) marca `da_verificare` e annota. Le
+  rate/quote a carico dell'unità diventano `Bill` (utility_type=condominio) con
+  scadenza → scadenzario. `query_bills`/`bills_service` filtrano per unità.
+- **Addestramento dell'agente** (`Household.agent_instructions`, runner
+  `_household_context`): istruzioni libere del nucleo + elenco unità immobiliari
+  vengono iniettate nel system prompt a ogni run, così l'agente impara le
+  convenzioni del nucleo (es. nome/alias dell'unità di condominio) senza toccare
+  il codice. Configurabili dalla GUI (Impostazioni → Addestramento assistente).
 - **Multi-utente**: ogni utente appartiene a un `Household`; tutti i dati sono
   scoping per `household_id`. Auth JWT (`app/deps.py`, `app/services/security.py`).
 - **Storage** (`app/services/storage.py`): `LocalStorage` su volume; S3 da fare.
@@ -53,7 +71,7 @@ soggetto e archivia.
   `VOYAGE_API_KEY` (off di default).
 
 ## Modello dati (`app/models`)
-- `Household`(id, name) 1—N `User`.
+- `Household`(id, name, agent_instructions) 1—N `User`, 1—N `PropertyUnit`.
 - `User`(household_id, email, hashed_password, full_name, codice_fiscale, role).
 - `Document`(household_id, uploaded_by/payer/beneficiary_user_id, doc_type, status,
   fiscal_classification, scope, file: original_filename/mime_type/storage_path/
@@ -65,11 +83,16 @@ soggetto e archivia.
   merchant, description_original/normalized, merch_category, quantity, unit_price,
   line_amount, discount, fiscal_classification, scope, fiscal_year, details (JSONB
   libero), reliability_note).
-- `Bill`(household_id, document_id?, payer_user_id, utility_type, supplier,
-  service_id (POD/PDR/cliente), bill_number, period_start/end, issue_date,
-  due_date, total_amount + scomposizione (energy_cost/fixed_cost/taxes),
-  consumption_quantity/unit, status, paid_date, payment_method, fiscal_year,
-  notes). Per le bollette/spese di casa ricorrenti.
+- `Bill`(household_id, document_id?, payer_user_id, property_unit_id?,
+  utility_type, supplier, service_id (POD/PDR/cliente), bill_number,
+  period_start/end, issue_date, due_date, total_amount + scomposizione
+  (energy_cost/fixed_cost/taxes), consumption_quantity/unit, status, paid_date,
+  payment_method, fiscal_year, notes, details (JSONB libero)). Per le
+  bollette/spese di casa ricorrenti.
+- `PropertyUnit`(household_id, name, address, aliases, owner_name,
+  condominium_name, millesimi, is_primary, notes, details (JSONB)). Unità
+  immobiliari del nucleo per la gestione del condominio e l'attribuzione delle
+  spese (una sola `is_primary` per nucleo).
 - Enum salvati come VARCHAR (vedi `app/models/base.py:enum_col`).
 - Categorie merceologiche stabili in `app/enums.py:MERCHANDISE_CATEGORIES`;
   tipi utenza/stato bolletta in `UtilityType`/`BillStatus`.
@@ -77,6 +100,10 @@ soggetto e archivia.
 ## Superficie API (`app/api`)
 - `auth`: `/auth/register` (nuovo nucleo+admin), `/auth/join`, `/auth/login`,
   `/auth/me`.
+- `household`: `GET /household` (info + addestramento), `PATCH /household`
+  (nome + `agent_instructions`, admin), `GET/POST /household/members`,
+  `DELETE /household/members/{id}`, `GET/POST /household/units`,
+  `PATCH/DELETE /household/units/{id}` (unità immobiliari, gestione admin).
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
   `GET /documents/{id}`, `GET /documents/{id}/file`,
@@ -84,6 +111,7 @@ soggetto e archivia.
 - `expenses`: `GET/POST /expenses`, `PATCH /expenses/{id}` (correzione/verifica).
 - `bills`: `GET/POST /bills`, `GET/PATCH/DELETE /bills/{id}`,
   `POST /bills/{id}/pay`, `/bills/overview|analysis|trend|upcoming|export.csv`.
+  Le bollette possono essere collegate a una `PropertyUnit` (`property_unit_id`).
 - `stats`: `/stats/by-category|by-member|by-scope|yearly|fiscal-summary`.
 - `chat`: `POST /chat` (agente conversazionale sullo storico).
 

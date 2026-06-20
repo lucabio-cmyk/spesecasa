@@ -12,6 +12,7 @@ class DocumentType(StrEnum):
     RICEVUTA = "ricevuta"
     RICEVUTA_SANITARIA = "ricevuta_sanitaria"
     BOLLETTA = "bolletta"
+    VERBALE_ASSEMBLEA = "verbale_assemblea"  # verbale di assemblea condominiale
     F24 = "f24"
     BONIFICO = "bonifico"
     CONTRATTO = "contratto"
