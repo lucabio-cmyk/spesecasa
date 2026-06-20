@@ -28,14 +28,14 @@ async def by_category(db: AsyncSession, household_id: uuid.UUID, year: int | Non
         stmt = stmt.where(Expense.fiscal_year == year)
     res = await db.execute(stmt)
     rows = [
-        {"category": c or "n/d", "total": float(t or 0), "count": n}
+        {"category": c or "n/d", "total": round(float(t or 0), 2), "count": n}
         for c, t, n in res.all()
     ]
 
     # Aggiunge le bollette come categoria a sé, per tenere conto di tutte le spese.
     btotal, bcount = await _bills_total(db, household_id, year)
     if bcount:
-        rows.append({"category": BILLS_CATEGORY, "total": btotal, "count": bcount})
+        rows.append({"category": BILLS_CATEGORY, "total": round(btotal, 2), "count": bcount})
 
     rows.sort(key=lambda r: r["total"], reverse=True)
     return rows
