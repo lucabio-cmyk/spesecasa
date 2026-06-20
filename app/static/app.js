@@ -9,6 +9,7 @@ const State = {
   user: null,
   members: [],
   membersById: {},
+  units: [],
   view: "dashboard",
   year: localStorage.getItem("year") || "",
   theme: localStorage.getItem("theme") || "light",
@@ -27,12 +28,13 @@ const STATUS_LABELS = {
 const SCOPE_LABELS = { personale: "Personale", familiare: "Familiare" };
 const DOCTYPE_LABELS = {
   scontrino: "Scontrino", fattura: "Fattura", ricevuta: "Ricevuta",
-  ricevuta_sanitaria: "Ricevuta sanitaria", bolletta: "Bolletta", f24: "F24", bonifico: "Bonifico",
+  ricevuta_sanitaria: "Ricevuta sanitaria", bolletta: "Bolletta",
+  verbale_assemblea: "Verbale assemblea", f24: "F24", bonifico: "Bonifico",
   contratto: "Contratto", polizza: "Polizza", altro: "Altro",
 };
 const DOCTYPE_ICONS = {
   scontrino: "🧾", fattura: "📄", ricevuta: "🧾", ricevuta_sanitaria: "💊", bolletta: "💡",
-  f24: "🏛️", bonifico: "🏦", contratto: "📑", polizza: "🛡️", altro: "📎",
+  verbale_assemblea: "🏢", f24: "🏛️", bonifico: "🏦", contratto: "📑", polizza: "🛡️", altro: "📎",
 };
 const UTILITY_LABELS = {
   energia_elettrica: "Energia elettrica", gas: "Gas", acqua: "Acqua",
@@ -63,6 +65,7 @@ const eur = (n) => (Number(n) || 0).toLocaleString("it-IT", { style: "currency",
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const initials = (name) => (name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
 const memberName = (id) => id ? (State.membersById[id]?.full_name || "—") : "—";
+const unitName = (id) => id ? (State.units.find(u => u.id === id)?.name || "—") : "—";
 const debounce = (fn, ms = 300) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 /* ---------- API ---------- */
@@ -257,7 +260,7 @@ function navigate(view) {
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
     bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
-    settings: ["Impostazioni", "Nucleo familiare e membri"],
+    settings: ["Impostazioni", "Nucleo, membri, immobili e addestramento dell'assistente"],
   };
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
@@ -776,7 +779,7 @@ async function loadBills() {
         <thead><tr><th>Utenza</th><th>Fornitore</th><th>Periodo</th><th>Scadenza</th><th class="num">Importo</th><th>Stato</th><th></th></tr></thead>
         <tbody>${rows.map(r => `
           <tr data-id="${r.id}">
-            <td><b>${UTILITY_ICONS[r.utility_type] || "🏠"} ${esc(UTILITY_LABELS[r.utility_type] || r.utility_type)}</b></td>
+            <td><b>${UTILITY_ICONS[r.utility_type] || "🏠"} ${esc(UTILITY_LABELS[r.utility_type] || r.utility_type)}</b>${r.property_unit_id ? `<div class="hint">🏠 ${esc(unitName(r.property_unit_id))}</div>` : ""}</td>
             <td>${esc(r.supplier || "—")}${r.consumption_quantity ? `<div class="hint">${Number(r.consumption_quantity).toLocaleString("it-IT")} ${esc(r.consumption_unit || "")}</div>` : ""}</td>
             <td class="mono">${r.period_start ? fmtDate(r.period_start) : "—"}${r.period_end ? ` → ${fmtDate(r.period_end)}` : ""}</td>
             <td class="mono">${fmtDate(r.due_date)}</td>
@@ -821,6 +824,7 @@ function openBillForm(bill = null) {
       <div class="field"><label>Unità</label><input class="input" name="consumption_unit" placeholder="kWh, Smc, m³" value="${esc(b.consumption_unit || "")}"></div>
       <div class="field"><label>Stato</label><select class="select" name="status">${optList(BILL_STATUS_LABELS, b.status || "da_pagare")}</select></div>
       <div class="field"><label>Intestatario</label><select class="select" name="payer_user_id">${optList({ "": "—", ...Object.fromEntries(memberOpts) }, b.payer_user_id || "")}</select></div>
+      ${State.units.length ? `<div class="field"><label>Unità immobiliare</label><select class="select" name="property_unit_id">${optList({ "": "—", ...Object.fromEntries(State.units.map(u => [u.id, u.name])) }, b.property_unit_id || "")}</select></div>` : ""}
       <div class="field" style="grid-column:1/-1"><label>Note</label><input class="input" name="notes" value="${esc(b.notes || "")}"></div>
       <div class="row between" style="grid-column:1/-1;margin-top:6px">
         <button type="button" class="btn btn-ghost" data-close>Annulla</button>
@@ -908,8 +912,11 @@ async function viewSettings() {
   const c = $("#content");
   c.innerHTML = skeletonRows();
   try {
-    const [hh, members] = await Promise.all([api("/household"), api("/household/members")]);
+    const [hh, members, units] = await Promise.all([
+      api("/household"), api("/household/members"), api("/household/units").catch(() => []),
+    ]);
     State.members = members; indexMembers();
+    State.units = units || [];
     const isAdmin = State.user?.role === "admin";
     $("#topbar-actions").innerHTML = "";
     const exportBtn = document.createElement("a");
@@ -940,6 +947,30 @@ async function viewSettings() {
             ${isAdmin ? `<td class="num">${m.id === State.user.id ? `<span class="hint">tu</span>` : `<button class="btn-icon" data-rm="${m.id}" title="Rimuovi">🗑️</button>`}</td>` : ""}
           </tr>`).join("")}</tbody></table></div>
         </div>
+      </div>
+
+      <div class="card card-pad" style="margin-top:16px">
+        <div class="row between" style="margin-bottom:6px">
+          <h3>🏢 Immobili / Unità immobiliari</h3>
+          ${isAdmin ? `<button class="btn btn-primary btn-sm" id="add-unit">+ Aggiungi unità</button>` : ""}
+        </div>
+        <p class="hint" style="margin-bottom:14px">Configura le unità del nucleo (casa, appartamenti, box). Servono a gestire le spese di condominio e ad <b>addestrare l'assistente</b>: indicando gli <i>alias</i> (come l'unità compare nei verbali/riparti — interno, scala, subalterno, nome intestatario) l'assistente attribuisce la spesa all'unità giusta senza dover chiedere.</p>
+        ${units.length ? `<div class="table-wrap"><table class="data">
+          <thead><tr><th>Unità</th><th>Condominio</th><th>Alias / riconoscimento</th><th class="num">Millesimi</th>${isAdmin ? "<th></th>" : ""}</tr></thead>
+          <tbody>${units.map(u => `<tr>
+            <td><b>${esc(u.name)}</b>${u.is_primary ? ` <span class="badge b-familiare">principale</span>` : ""}${u.address ? `<div class="hint">${esc(u.address)}</div>` : ""}</td>
+            <td>${esc(u.condominium_name || "—")}${u.owner_name ? `<div class="hint">int. ${esc(u.owner_name)}</div>` : ""}</td>
+            <td class="hint">${esc(u.aliases || "—")}</td>
+            <td class="num mono">${u.millesimi != null ? esc(u.millesimi) : "—"}</td>
+            ${isAdmin ? `<td class="num row" style="gap:4px;justify-content:flex-end"><button class="btn-icon" data-edit-unit="${u.id}" title="Modifica">✏️</button><button class="btn-icon" data-del-unit="${u.id}" title="Elimina">🗑️</button></td>` : ""}
+          </tr>`).join("")}</tbody></table></div>` : `<div class="empty"><div class="big">🏢</div><p>Nessuna unità configurata.${isAdmin ? " Aggiungi la prima per gestire al meglio le spese di condominio." : ""}</p></div>`}
+      </div>
+
+      <div class="card card-pad" style="margin-top:16px">
+        <h3 style="margin-bottom:6px">🧠 Addestramento assistente</h3>
+        <p class="hint" style="margin-bottom:14px">Istruzioni libere che l'assistente seguirà per questo nucleo: convenzioni, come trattare casi ricorrenti, quale unità considerare di default per il condominio, preferenze di classificazione. Vengono aggiunte al suo contesto.</p>
+        <textarea class="input" id="agent-instructions" rows="6" placeholder="Es. La nostra unità nel condominio Aurora è l'interno 5, intestata a Mario Rossi. Per le bollette del gas considerare la seconda casa solo se citato 'Via Verdi'." ${isAdmin ? "" : "disabled"}>${esc(hh.agent_instructions || "")}</textarea>
+        ${isAdmin ? `<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn btn-primary btn-sm" id="save-instructions">Salva istruzioni</button></div>` : `<p class="hint" style="margin-top:10px">Solo l'amministratore può modificare l'addestramento.</p>`}
       </div>`;
 
     $("#copy-id")?.addEventListener("click", () => { navigator.clipboard.writeText(hh.id); toast("ID copiato", { type: "ok", timeout: 1500 }); });
@@ -949,7 +980,61 @@ async function viewSettings() {
       try { await api(`/household/members/${b.dataset.rm}`, { method: "DELETE" }); toast("Membro rimosso", { type: "ok" }); viewSettings(); }
       catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
     }));
+    $("#add-unit")?.addEventListener("click", () => openUnitForm());
+    c.querySelectorAll("[data-edit-unit]").forEach(b => b.addEventListener("click", () => openUnitForm(units.find(u => u.id === b.dataset.editUnit))));
+    c.querySelectorAll("[data-del-unit]").forEach(b => b.addEventListener("click", async () => {
+      if (!(await confirmDialog("Eliminare l'unità?", "Le bollette collegate resteranno, ma senza associazione all'unità."))) return;
+      try { await api(`/household/units/${b.dataset.delUnit}`, { method: "DELETE" }); toast("Unità eliminata", { type: "ok" }); viewSettings(); }
+      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    }));
+    $("#save-instructions")?.addEventListener("click", async () => {
+      const val = $("#agent-instructions").value;
+      try { await api("/household", { method: "PATCH", body: { agent_instructions: val } }); toast("Addestramento salvato", { type: "ok" }); }
+      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    });
   } catch (err) { c.innerHTML = errorBox(err.message); }
+}
+
+function openUnitForm(unit = null) {
+  const u = unit || {};
+  openModal(`
+    <div class="modal-head"><h3>${unit ? "Modifica unità" : "Aggiungi unità immobiliare"}</h3><button class="btn-icon" data-close>✕</button></div>
+    <form id="unit-form" class="grid cols-2" style="gap:12px">
+      <div class="field" style="grid-column:1/-1"><label>Nome unità</label><input class="input" name="name" placeholder="es. Casa Via Roma 10, int. 5" value="${esc(u.name || "")}" required></div>
+      <div class="field"><label>Indirizzo</label><input class="input" name="address" value="${esc(u.address || "")}"></div>
+      <div class="field"><label>Condominio</label><input class="input" name="condominium_name" placeholder="es. Condominio Aurora" value="${esc(u.condominium_name || "")}"></div>
+      <div class="field"><label>Intestatario (nei verbali)</label><input class="input" name="owner_name" value="${esc(u.owner_name || "")}"></div>
+      <div class="field"><label>Millesimi</label><input class="input" type="number" step="0.001" name="millesimi" value="${esc(u.millesimi ?? "")}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Alias / come compare nei documenti <span class="hint">(separati da virgola)</span></label><input class="input" name="aliases" placeholder="es. interno 5, scala B, sub 12, Rossi Mario" value="${esc(u.aliases || "")}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Note <span class="hint">(addestramento)</span></label><input class="input" name="notes" value="${esc(u.notes || "")}"></div>
+      <label class="field" style="grid-column:1/-1;flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="is_primary" ${u.is_primary ? "checked" : ""}><span>Unità principale (default quando l'attribuzione è incerta)</span></label>
+      <div class="row between" style="grid-column:1/-1;margin-top:6px">
+        <button type="button" class="btn btn-ghost" data-close>Annulla</button>
+        <button type="submit" class="btn btn-primary">${unit ? "Salva" : "Aggiungi"}</button>
+      </div>
+    </form>`);
+  $("#modal-root").querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", closeModal));
+  $("#unit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = Object.fromEntries(new FormData(form).entries());
+    const body = {
+      name: fd.name,
+      address: fd.address || null,
+      condominium_name: fd.condominium_name || null,
+      owner_name: fd.owner_name || null,
+      millesimi: fd.millesimi === "" ? null : fd.millesimi,
+      aliases: fd.aliases || null,
+      notes: fd.notes || null,
+      is_primary: form.querySelector("[name=is_primary]").checked,
+    };
+    try {
+      if (unit) await api(`/household/units/${unit.id}`, { method: "PATCH", body });
+      else await api("/household/units", { method: "POST", body });
+      toast(unit ? "Unità aggiornata" : "Unità aggiunta", { type: "ok" });
+      closeModal(); viewSettings();
+    } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
+  });
 }
 
 function addMemberDialog() {
@@ -1015,8 +1100,13 @@ async function boot() {
   if (!State.token) { renderAuth("login"); return; }
   try {
     State.user = await api("/auth/me");
-    const [members, hh] = await Promise.all([api("/household/members"), api("/household").catch(() => null)]);
+    const [members, hh, units] = await Promise.all([
+      api("/household/members"),
+      api("/household").catch(() => null),
+      api("/household/units").catch(() => []),
+    ]);
     State.members = members; indexMembers();
+    State.units = units || [];
     if (hh) State.user.household_name = hh.name;
     renderShell();
     navigate(State.view || "dashboard");

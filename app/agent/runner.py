@@ -2,6 +2,7 @@ import json
 from datetime import date
 
 from anthropic import AsyncAnthropic
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.system_prompt import SYSTEM_PROMPT
@@ -9,6 +10,8 @@ from app.agent.tools import TOOLS, AgentContext, dispatch, file_to_content_block
 from app.config import settings
 from app.enums import DocumentStatus, FiscalClassification
 from app.models.document import Document
+from app.models.household import Household
+from app.models.property_unit import PropertyUnit
 from app.services.embeddings import index_document
 from app.services.storage import get_storage
 
@@ -35,9 +38,54 @@ def _build_tools() -> list[dict]:
     return tools
 
 
+async def _household_context(db: AsyncSession, household_id) -> str:
+    """Blocco di "addestramento" per il system prompt: istruzioni libere del
+    nucleo + unità immobiliari configurate. Permette all'agente di attribuire
+    correttamente le spese (es. condominio) senza chiedere ogni volta."""
+    parts: list[str] = []
+    household = await db.get(Household, household_id)
+    if household and household.agent_instructions and household.agent_instructions.strip():
+        parts.append(
+            "ISTRUZIONI DEL NUCLEO (addestramento fornito dall'utente, rispettale "
+            f"quando pertinenti):\n{household.agent_instructions.strip()}"
+        )
+    res = await db.execute(
+        select(PropertyUnit)
+        .where(PropertyUnit.household_id == household_id)
+        .order_by(PropertyUnit.is_primary.desc(), PropertyUnit.name)
+    )
+    units = list(res.scalars())
+    if units:
+        lines = []
+        for u in units:
+            bits = [f'"{u.name}"']
+            if u.is_primary:
+                bits.append("(principale)")
+            if u.address:
+                bits.append(f"indirizzo: {u.address}")
+            if u.condominium_name:
+                bits.append(f"condominio: {u.condominium_name}")
+            if u.owner_name:
+                bits.append(f"intestatario: {u.owner_name}")
+            if u.aliases:
+                bits.append(f"compare anche come: {u.aliases}")
+            if u.millesimi is not None:
+                bits.append(f"millesimi: {u.millesimi}")
+            if u.notes:
+                bits.append(f"note: {u.notes}")
+            lines.append("- " + "; ".join(bits))
+        parts.append(
+            "UNITÀ IMMOBILIARI DEL NUCLEO (usale per attribuire le spese di "
+            "condominio all'unità corretta; se un documento ne cita una di queste, "
+            "è quella del nucleo):\n" + "\n".join(lines)
+        )
+    return ("\n\n" + "\n\n".join(parts)) if parts else ""
+
+
 async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -> str:
     tools = _build_tools()
     system_text = f"{SYSTEM_PROMPT}\n\nData odierna: {date.today().isoformat()}."
+    system_text += await _household_context(db, ctx.household_id)
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
         resp = await client.messages.create(

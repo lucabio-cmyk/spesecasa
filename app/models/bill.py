@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.enums import BillStatus, UtilityType
@@ -32,6 +32,11 @@ class Bill(Base, TimestampMixin):
     # Intestatario dell'utenza / soggetto che sostiene la spesa.
     payer_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
+    )
+    # Unità immobiliare a cui si riferisce la spesa (utile soprattutto per il
+    # condominio quando il nucleo possiede/gestisce più unità).
+    property_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("property_units.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     utility_type: Mapped[UtilityType] = mapped_column(
@@ -68,5 +73,10 @@ class Bill(Base, TimestampMixin):
     fiscal_year: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     reliability_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Dati strutturati liberi: per il condominio l'agente vi salva l'analisi del
+    # verbale/riparto (deliberazioni rilevanti, quota ordinaria/straordinaria,
+    # fondo, lavori potenzialmente agevolabili, rate e relative scadenze).
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     document: Mapped["Document | None"] = relationship()
+    property_unit: Mapped["PropertyUnit | None"] = relationship()

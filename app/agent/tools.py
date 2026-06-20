@@ -18,6 +18,7 @@ from app.enums import (
 from app.models.bill import Bill
 from app.models.document import Document
 from app.models.expense import Expense
+from app.models.property_unit import PropertyUnit
 from app.models.user import User
 from app.services import bills as bills_service
 from app.services import search as search_service
@@ -25,6 +26,7 @@ from app.services import stats as stats_service
 from app.services.resolvers import (
     find_existing_document,
     resolve_member_id,
+    resolve_unit_id,
     to_date,
     to_decimal,
 )
@@ -61,6 +63,19 @@ TOOLS = [
     {
         "name": "list_household_members",
         "description": "Elenca i membri del nucleo familiare (id, nome, codice fiscale, ruolo). Usalo per attribuire correttamente soggetto pagante e beneficiario.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "list_property_units",
+        "description": (
+            "Elenca le UNITÀ IMMOBILIARI configurate dal nucleo (casa/e, appartamenti, "
+            "box, ...). Per ognuna: id, nome, indirizzo, alias (come compare nei documenti: "
+            "interno/scala/subalterno, codice condòmino, nomi intestatari), nome del "
+            "condominio, intestatario, millesimi, se è l'unità principale e note di "
+            "addestramento. USALO quando elabori una spesa di CONDOMINIO o un VERBALE DI "
+            "ASSEMBLEA per capire a quale unità del nucleo si riferisce il documento, "
+            "soprattutto se nel documento compaiono più unità/condòmini."
+        ),
         "input_schema": {"type": "object", "properties": {}},
     },
     {
@@ -249,9 +264,11 @@ TOOLS = [
                 "status": {"type": "string", "enum": _BILL_STATUS},
                 "payment_method": {"type": "string", "description": "domiciliazione/RID, bonifico, ..."},
                 "payer": {"type": "string", "description": "intestatario/soggetto che paga"},
+                "property_unit": {"type": "string", "description": "unità immobiliare a cui si riferisce (nome, alias o id da list_property_units): essenziale per il condominio quando il nucleo ha più unità"},
                 "fiscal_year": {"type": "integer"},
                 "reliability_note": {"type": "string"},
                 "notes": {"type": "string"},
+                "details": {"type": "object", "description": "dati strutturati liberi: per il condominio salva qui l'analisi del verbale/riparto (deliberazioni rilevanti, quota ordinaria/straordinaria, fondo, lavori potenzialmente agevolabili con bonus, elenco rate e scadenze, millesimi applicati)"},
             },
         },
     },
@@ -283,9 +300,11 @@ TOOLS = [
                 "status": {"type": "string", "enum": _BILL_STATUS},
                 "payment_method": {"type": "string"},
                 "payer": {"type": "string"},
+                "property_unit": {"type": "string", "description": "unità immobiliare a cui si riferisce (nome, alias o id)"},
                 "fiscal_year": {"type": "integer"},
                 "reliability_note": {"type": "string"},
                 "notes": {"type": "string"},
+                "details": {"type": "object", "description": "dati strutturati liberi (es. per il condominio: deliberazioni, quota ordinaria/straordinaria, rate)"},
             },
         },
     },
@@ -302,6 +321,7 @@ TOOLS = [
             "properties": {
                 "fiscal_year": {"type": "integer"},
                 "utility_type": {"type": "string", "enum": _UTILITY},
+                "property_unit": {"type": "string", "description": "limita l'analisi a un'unità immobiliare (nome, alias o id)"},
                 "include_upcoming": {"type": "boolean", "description": "includi lo scadenzario"},
             },
         },
@@ -382,6 +402,30 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                         "full_name": u.full_name,
                         "codice_fiscale": u.codice_fiscale,
                         "role": str(u.role),
+                    }
+                    for u in res.scalars()
+                ]
+            }
+
+        if name == "list_property_units":
+            res = await db.execute(
+                select(PropertyUnit)
+                .where(PropertyUnit.household_id == ctx.household_id)
+                .order_by(PropertyUnit.is_primary.desc(), PropertyUnit.name)
+            )
+            return {
+                "units": [
+                    {
+                        "id": str(u.id),
+                        "name": u.name,
+                        "address": u.address,
+                        "aliases": u.aliases,
+                        "owner_name": u.owner_name,
+                        "condominium_name": u.condominium_name,
+                        "millesimi": str(u.millesimi) if u.millesimi is not None else None,
+                        "is_primary": u.is_primary,
+                        "notes": u.notes,
+                        "details": u.details,
                     }
                     for u in res.scalars()
                 ]
@@ -676,6 +720,10 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             status_raw = tool_input.get("status")
             status = BillStatus(status_raw) if status_raw in _BILL_STATUS else BillStatus.DA_PAGARE
             payer = await resolve_member_id(db, ctx.household_id, tool_input.get("payer"))
+            unit_id = await resolve_unit_id(db, ctx.household_id, tool_input.get("property_unit"))
+            bill_details = tool_input.get("details")
+            if not isinstance(bill_details, dict) or not bill_details:
+                bill_details = None
             # Importo 0,00 è valido (es. nota di credito/conguaglio): usa il
             # fallback del documento solo se l'importo è davvero assente (None).
             total = to_decimal(tool_input.get("total_amount"))
@@ -685,6 +733,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 household_id=ctx.household_id,
                 document_id=doc_id,
                 payer_user_id=payer or (doc.payer_user_id if doc else None),
+                property_unit_id=unit_id,
                 utility_type=utype,
                 supplier=tool_input.get("supplier") or (doc.issuer if doc else None),
                 service_id=tool_input.get("service_id"),
@@ -704,6 +753,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 fiscal_year=fyear,
                 reliability_note=tool_input.get("reliability_note"),
                 notes=tool_input.get("notes"),
+                details=bill_details,
             )
             if bill.total_amount is None and utype is UtilityType.ALTRO:
                 return {
@@ -724,19 +774,25 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 "due_date": bill.due_date.isoformat() if bill.due_date else None,
                 "status": str(bill.status),
                 "fiscal_year": bill.fiscal_year,
+                "property_unit_id": str(bill.property_unit_id) if bill.property_unit_id else None,
             }
 
         if name == "query_bills":
             year = tool_input.get("fiscal_year")
             year = int(year) if year else None
+            unit_id = await resolve_unit_id(db, ctx.household_id, tool_input.get("property_unit"))
             result = {
-                "cost_analysis": await bills_service.cost_analysis(db, ctx.household_id, year),
+                "cost_analysis": await bills_service.cost_analysis(
+                    db, ctx.household_id, year, unit_id
+                ),
                 "trend": await bills_service.trend(
-                    db, ctx.household_id, tool_input.get("utility_type"), year
+                    db, ctx.household_id, tool_input.get("utility_type"), year, unit_id
                 ),
             }
             if tool_input.get("include_upcoming"):
-                result["upcoming"] = await bills_service.upcoming(db, ctx.household_id)
+                result["upcoming"] = await bills_service.upcoming(
+                    db, ctx.household_id, unit_id=unit_id
+                )
             return result
 
         if name == "query_expenses":
