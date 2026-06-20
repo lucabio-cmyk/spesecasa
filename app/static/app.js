@@ -326,7 +326,7 @@ async function viewDashboard() {
     updateReviewBadge(ov.to_review);
 
     const kpis = [
-      { label: "Totale spese", value: eur(ov.total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${ov.lines} movimenti` },
+      { label: "Totale spese", value: eur(ov.total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${ov.lines} movimenti · ${ov.bills} bollette` },
       { label: "Potenz. agevolabile", value: eur(ov.deductible_total), icon: "🏷️", bg: "var(--green-100)", fg: "#15803d", delta: "detraibile + deducibile" },
       { label: "Documenti", value: ov.documents, icon: "🗂️", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "in archivio" },
       { label: "Da rivedere", value: ov.to_review, icon: "🔎", bg: "var(--amber-100)", fg: "#b45309", delta: "richiedono verifica" },
