@@ -101,6 +101,7 @@ function toast(title, { desc = "", type = "ok", timeout = 3800 } = {}) {
 
 /* ---------- Modal / Drawer ---------- */
 function openModal(html, { drawer = false } = {}) {
+  if (_modalBlobUrl) { URL.revokeObjectURL(_modalBlobUrl); _modalBlobUrl = null; }
   const root = $("#modal-root");
   root.innerHTML = `<div class="overlay">${drawer ? `<div class="drawer">${html}</div>` : `<div class="modal">${html}</div>`}</div>`;
   const overlay = $(".overlay", root);
@@ -109,7 +110,14 @@ function openModal(html, { drawer = false } = {}) {
   document.addEventListener("keydown", onKey);
   return root;
 }
-function closeModal() { $("#modal-root").innerHTML = ""; }
+function closeModal() {
+  if (_modalBlobUrl) { URL.revokeObjectURL(_modalBlobUrl); _modalBlobUrl = null; }
+  $("#modal-root").innerHTML = "";
+}
+
+// URL oggetto del file attualmente in anteprima: va revocato alla chiusura
+// per non perdere memoria (i blob restano allocati finché non si revoca).
+let _modalBlobUrl = null;
 
 function confirmDialog(title, message, { danger = true, okText = "Conferma" } = {}) {
   return new Promise((resolve) => {
@@ -539,7 +547,14 @@ async function openDocument(id) {
   try {
     const [doc, lines] = await Promise.all([api(`/documents/${id}`), api(`/documents/${id}/expenses`)]);
     const isImg = (doc.mime_type || "").startsWith("image/");
-    const fileUrl = `/documents/${id}/file`;
+    // Il file originale è protetto da JWT in header: img/iframe/link nativi non
+    // lo inviano. Scarichiamo il file via api() (che allega il token) e usiamo
+    // un blob URL come sorgente. Il blob viene revocato in closeModal().
+    let fileUrl = "";
+    try {
+      const res = await api(`/documents/${id}/file`, { raw: true });
+      _modalBlobUrl = fileUrl = URL.createObjectURL(await res.blob());
+    } catch { /* file non disponibile: i riquadri di anteprima restano vuoti */ }
     const body = $("#modal-root .drawer");
     body.innerHTML = `
       <div class="drawer-head">
