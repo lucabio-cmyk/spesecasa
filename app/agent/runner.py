@@ -112,7 +112,9 @@ async def process_document(db: AsyncSession, document: Document) -> None:
             "conoscere i membri del nucleo; 2) identifica il tipo ed estrai i dati; "
             "3) usa find_existing_document per evitare duplicati; 4) classifica "
             "fiscalmente e attribuisci soggetto pagante/beneficiario/ambito; 5) salva "
-            "l'header con save_document e le righe con add_expenses; 6) concludi con una "
+            "l'header con save_document e le righe con add_expenses; se è una BOLLETTA/spesa "
+            "di casa (luce, gas, acqua, rifiuti, internet, condominio, ...) usa invece "
+            "save_bill estraendo periodo, scadenza, consumo e costo; 6) concludi con una "
             "sintesi pratica in italiano. Non inventare soglie o percentuali."
         )
         messages = [

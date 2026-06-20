@@ -1,19 +1,24 @@
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enums import (
+    BillStatus,
     DocumentStatus,
     DocumentType,
     ExpenseScope,
     FiscalClassification,
     MERCHANDISE_CATEGORIES,
+    UTILITY_DEFAULT_UNIT,
+    UtilityType,
 )
+from app.models.bill import Bill
 from app.models.document import Document
 from app.models.expense import Expense
 from app.models.user import User
+from app.services import bills as bills_service
 from app.services import stats as stats_service
 from app.services.resolvers import (
     find_existing_document,
@@ -25,6 +30,8 @@ from app.services.resolvers import (
 _FISCAL = [c.value for c in FiscalClassification]
 _SCOPE = [s.value for s in ExpenseScope]
 _DOC_TYPE = [d.value for d in DocumentType]
+_UTILITY = [u.value for u in UtilityType]
+_BILL_STATUS = [s.value for s in BillStatus]
 
 
 @dataclass
@@ -135,6 +142,94 @@ TOOLS = [
         },
     },
     {
+        "name": "save_bill",
+        "description": (
+            "Registra una BOLLETTA / spesa di casa ricorrente (luce, gas, acqua, "
+            "rifiuti/TARI, internet/telefono, riscaldamento, condominio, ...) estratta "
+            "dal documento in elaborazione. Usalo per le bollette al posto di add_expenses, "
+            "per abilitare valutazione dei costi (consumi, costo unitario, andamento) e "
+            "amministrazione (scadenze, stato pagamento). Estrai periodo di competenza, "
+            "scadenza, importo totale e, se presenti, consumo con unità (kWh/Smc/m³) e "
+            "scomposizione del costo. Non inventare i valori mancanti."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "utility_type": {"type": "string", "enum": _UTILITY},
+                "supplier": {"type": "string", "description": "fornitore/emittente"},
+                "service_id": {"type": "string", "description": "POD (luce), PDR (gas) o codice cliente"},
+                "bill_number": {"type": "string"},
+                "period_start": {"type": "string", "description": "inizio competenza AAAA-MM-GG"},
+                "period_end": {"type": "string", "description": "fine competenza AAAA-MM-GG"},
+                "issue_date": {"type": "string", "description": "data emissione AAAA-MM-GG"},
+                "due_date": {"type": "string", "description": "scadenza pagamento AAAA-MM-GG"},
+                "total_amount": {"type": "number"},
+                "energy_cost": {"type": "number", "description": "costo materia prima (energia/gas)"},
+                "fixed_cost": {"type": "number", "description": "quote fisse/trasporto/gestione"},
+                "taxes": {"type": "number", "description": "imposte/accise/IVA"},
+                "consumption_quantity": {"type": "number"},
+                "consumption_unit": {"type": "string", "description": "kWh, Smc, m³, ..."},
+                "status": {"type": "string", "enum": _BILL_STATUS},
+                "payment_method": {"type": "string", "description": "domiciliazione/RID, bonifico, ..."},
+                "payer": {"type": "string", "description": "intestatario/soggetto che paga"},
+                "fiscal_year": {"type": "integer"},
+                "reliability_note": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "record_bill",
+        "description": (
+            "Registra una bolletta descritta a parole in chat, SENZA documento allegato "
+            "(es. 'bolletta della luce di 84 euro in scadenza il 30/06'). total_amount o "
+            "utility_type sono il minimo utile: se mancano entrambi chiedi all'utente. "
+            "Stessi campi di save_bill."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "utility_type": {"type": "string", "enum": _UTILITY},
+                "supplier": {"type": "string"},
+                "service_id": {"type": "string"},
+                "bill_number": {"type": "string"},
+                "period_start": {"type": "string", "description": "AAAA-MM-GG"},
+                "period_end": {"type": "string", "description": "AAAA-MM-GG"},
+                "issue_date": {"type": "string", "description": "AAAA-MM-GG"},
+                "due_date": {"type": "string", "description": "AAAA-MM-GG"},
+                "total_amount": {"type": "number"},
+                "energy_cost": {"type": "number"},
+                "fixed_cost": {"type": "number"},
+                "taxes": {"type": "number"},
+                "consumption_quantity": {"type": "number"},
+                "consumption_unit": {"type": "string"},
+                "status": {"type": "string", "enum": _BILL_STATUS},
+                "payment_method": {"type": "string"},
+                "payer": {"type": "string"},
+                "fiscal_year": {"type": "integer"},
+                "reliability_note": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "query_bills",
+        "description": (
+            "Analizza le bollette/spese di casa del nucleo: valutazione costi per tipo di "
+            "utenza (totale, medio, costo unitario), andamento nel tempo e scadenzario "
+            "(bollette scadute e in arrivo non pagate). Usalo per domande tipo 'quanto "
+            "spendo di luce?', 'è aumentato il gas?', 'quali bollette devo pagare?'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fiscal_year": {"type": "integer"},
+                "utility_type": {"type": "string", "enum": _UTILITY},
+                "include_upcoming": {"type": "boolean", "description": "includi lo scadenzario"},
+            },
+        },
+    },
+    {
         "name": "query_expenses",
         "description": "Interroga lo storico spese del nucleo con filtri e restituisce aggregati (totale, per categoria, per classificazione fiscale).",
         "input_schema": {
@@ -144,6 +239,43 @@ TOOLS = [
                 "category": {"type": "string"},
                 "classification": {"type": "string", "enum": _FISCAL},
             },
+        },
+    },
+    {
+        "name": "find_expenses",
+        "description": (
+            "Cerca SINGOLE spese/movimenti del nucleo (non aggregati) per individuarne una "
+            "da correggere o cancellare. Restituisce id, data, negozio, descrizione, importo, "
+            "categoria e se proviene da un documento. Filtri opzionali: testo (negozio/"
+            "descrizione), anno, categoria, data esatta. Usalo PRIMA di delete_expense per "
+            "trovare l'id corretto e per mostrare all'utente le candidate."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "testo cercato in negozio/descrizione"},
+                "fiscal_year": {"type": "integer"},
+                "category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
+                "purchase_date": {"type": "string", "description": "AAAA-MM-GG"},
+                "limit": {"type": "integer", "description": "max risultati (default 20)"},
+            },
+        },
+    },
+    {
+        "name": "delete_expense",
+        "description": (
+            "Cancella DEFINITIVAMENTE una spesa/movimento dato il suo id (ottenuto da "
+            "find_expenses). Operazione irreversibile: usala solo dopo aver individuato con "
+            "certezza la spesa e aver ricevuto conferma dall'utente. Se la spesa proviene da "
+            "un documento (from_document=true) avvisa l'utente che la cifra del documento "
+            "potrebbe non quadrare più, e procedi solo se confermato."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expense_id": {"type": "string", "description": "id della spesa da cancellare"},
+            },
+            "required": ["expense_id"],
         },
     },
     {
@@ -315,6 +447,154 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 "fiscal_year": expense.fiscal_year,
                 "payer_user_id": str(expense.payer_user_id) if expense.payer_user_id else None,
             }
+
+        if name == "find_expenses":
+            stmt = (
+                select(Expense)
+                .where(Expense.household_id == ctx.household_id)
+                .order_by(Expense.purchase_date.desc().nullslast(), Expense.created_at.desc())
+            )
+            if tool_input.get("fiscal_year"):
+                stmt = stmt.where(Expense.fiscal_year == int(tool_input["fiscal_year"]))
+            if tool_input.get("category"):
+                stmt = stmt.where(Expense.merch_category == tool_input["category"])
+            pdate = to_date(tool_input.get("purchase_date"))
+            if pdate:
+                stmt = stmt.where(Expense.purchase_date == pdate)
+            needle = (tool_input.get("query") or "").strip().lower()
+            if needle:
+                like = f"%{needle}%"
+                stmt = stmt.where(
+                    func.lower(func.coalesce(Expense.merchant, ""))
+                    .concat(" ")
+                    .concat(func.lower(func.coalesce(Expense.description_normalized, "")))
+                    .concat(" ")
+                    .concat(func.lower(func.coalesce(Expense.description_original, "")))
+                    .like(like)
+                )
+            limit = int(tool_input.get("limit") or 20)
+            stmt = stmt.limit(max(1, min(limit, 50)))
+            res = await db.execute(stmt)
+            rows = list(res.scalars())
+            return {
+                "count": len(rows),
+                "expenses": [
+                    {
+                        "id": str(e.id),
+                        "purchase_date": e.purchase_date.isoformat() if e.purchase_date else None,
+                        "merchant": e.merchant,
+                        "description": e.description_normalized or e.description_original,
+                        "line_amount": str(e.line_amount),
+                        "merch_category": e.merch_category,
+                        "fiscal_classification": str(e.fiscal_classification),
+                        "from_document": e.document_id is not None,
+                    }
+                    for e in rows
+                ],
+            }
+
+        if name == "delete_expense":
+            raw_id = tool_input.get("expense_id")
+            try:
+                expense_id = uuid.UUID(str(raw_id))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "expense_id non valido"}
+            expense = await db.get(Expense, expense_id)
+            if not expense or expense.household_id != ctx.household_id:
+                return {"ok": False, "error": "spesa non trovata"}
+            snapshot = {
+                "id": str(expense.id),
+                "purchase_date": expense.purchase_date.isoformat() if expense.purchase_date else None,
+                "merchant": expense.merchant,
+                "description": expense.description_normalized or expense.description_original,
+                "line_amount": str(expense.line_amount),
+                "from_document": expense.document_id is not None,
+            }
+            await db.delete(expense)
+            await db.commit()
+            return {"ok": True, "deleted": snapshot}
+
+        if name in ("save_bill", "record_bill"):
+            doc_id = ctx.document_id if name == "save_bill" else None
+            doc = await db.get(Document, doc_id) if doc_id else None
+            utype_raw = tool_input.get("utility_type")
+            utype = UtilityType(utype_raw) if utype_raw in _UTILITY else UtilityType.ALTRO
+            period_end = to_date(tool_input.get("period_end"))
+            period_start = to_date(tool_input.get("period_start"))
+            issue_date = to_date(tool_input.get("issue_date"))
+            due_date = to_date(tool_input.get("due_date"))
+            fyear = tool_input.get("fiscal_year")
+            if fyear:
+                fyear = int(fyear)
+            else:
+                ref = period_end or period_start or issue_date or due_date
+                fyear = ref.year if ref else (doc.fiscal_year if doc else None)
+            unit = tool_input.get("consumption_unit") or UTILITY_DEFAULT_UNIT.get(utype.value) or None
+            status_raw = tool_input.get("status")
+            status = BillStatus(status_raw) if status_raw in _BILL_STATUS else BillStatus.DA_PAGARE
+            payer = await resolve_member_id(db, ctx.household_id, tool_input.get("payer"))
+            # Importo 0,00 è valido (es. nota di credito/conguaglio): usa il
+            # fallback del documento solo se l'importo è davvero assente (None).
+            total = to_decimal(tool_input.get("total_amount"))
+            if total is None and doc:
+                total = doc.total_amount
+            bill = Bill(
+                household_id=ctx.household_id,
+                document_id=doc_id,
+                payer_user_id=payer or (doc.payer_user_id if doc else None),
+                utility_type=utype,
+                supplier=tool_input.get("supplier") or (doc.issuer if doc else None),
+                service_id=tool_input.get("service_id"),
+                bill_number=tool_input.get("bill_number"),
+                period_start=period_start,
+                period_end=period_end,
+                issue_date=issue_date or (doc.doc_date if doc else None),
+                due_date=due_date,
+                total_amount=total,
+                energy_cost=to_decimal(tool_input.get("energy_cost")),
+                fixed_cost=to_decimal(tool_input.get("fixed_cost")),
+                taxes=to_decimal(tool_input.get("taxes")),
+                consumption_quantity=to_decimal(tool_input.get("consumption_quantity")),
+                consumption_unit=unit,
+                status=status,
+                payment_method=tool_input.get("payment_method"),
+                fiscal_year=fyear,
+                reliability_note=tool_input.get("reliability_note"),
+                notes=tool_input.get("notes"),
+            )
+            if bill.total_amount is None and utype is UtilityType.ALTRO:
+                return {
+                    "ok": False,
+                    "error": "manca sia l'importo sia il tipo di utenza: chiedi all'utente",
+                }
+            # Se è un documento, marcalo come bolletta per coerenza dell'archivio.
+            if doc and doc.doc_type != DocumentType.BOLLETTA:
+                doc.doc_type = DocumentType.BOLLETTA
+            db.add(bill)
+            await db.commit()
+            await db.refresh(bill)
+            return {
+                "ok": True,
+                "bill_id": str(bill.id),
+                "utility_type": str(bill.utility_type),
+                "total_amount": str(bill.total_amount) if bill.total_amount is not None else None,
+                "due_date": bill.due_date.isoformat() if bill.due_date else None,
+                "status": str(bill.status),
+                "fiscal_year": bill.fiscal_year,
+            }
+
+        if name == "query_bills":
+            year = tool_input.get("fiscal_year")
+            year = int(year) if year else None
+            result = {
+                "cost_analysis": await bills_service.cost_analysis(db, ctx.household_id, year),
+                "trend": await bills_service.trend(
+                    db, ctx.household_id, tool_input.get("utility_type"), year
+                ),
+            }
+            if tool_input.get("include_upcoming"):
+                result["upcoming"] = await bills_service.upcoming(db, ctx.household_id)
+            return result
 
         if name == "query_expenses":
             year = tool_input.get("fiscal_year")

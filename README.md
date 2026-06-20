@@ -23,8 +23,13 @@ dipendenza esterna) su `/`. Aprendo `http://localhost:8000/` trovi:
   anteprima del file, righe collegate, rielaborazione ed eliminazione.
 - **Spese**: tabella dei movimenti con **correzione inline** di categoria,
   classificazione fiscale, ambito e soggetto pagante; eliminazione riga.
+- **Casa & Bollette**: riconoscimento delle bollette domestiche (luce, gas,
+  acqua, rifiuti/TARI, internet, condominio, ...), **valutazione costi**
+  (importo medio, consumi, costo unitario €/kWh·Smc·m³, andamento) e
+  **amministrazione** con scadenzario (bollette scadute e in arrivo), stato di
+  pagamento e export CSV. Inserimento manuale e modifica di una bolletta.
 - **Assistente**: chat in linguaggio naturale sullo storico ("quanto ho speso in
-  farmaci nel 2025?").
+  farmaci nel 2025?", "quanto spendo di luce?", "quali bollette devo pagare?").
 - **Impostazioni**: gestione membri del nucleo ed **export CSV** per il
   commercialista (riepilogo per soggetto e classificazione fiscale).
 - Tema chiaro/scuro, layout responsive (desktop e mobile), notifiche e stati di
@@ -67,6 +72,9 @@ Docs interattive: http://localhost:8000/docs
    per scaricare l'originale.
 4. `GET /stats/*` per le statistiche; `POST /chat` per interrogare lo storico
    ("quanto ho speso in farmaci nel 2025?").
+5. `GET /bills/*` per le bollette di casa: `/bills/analysis` (costi per utenza),
+   `/bills/trend` (andamento), `/bills/upcoming` (scadenzario),
+   `POST /bills/{id}/pay` (segna pagata), `/bills/export.csv`.
 
 ## Deploy su Railway
 1. Crea un nuovo progetto da questo repo (usa il `Dockerfile`).
