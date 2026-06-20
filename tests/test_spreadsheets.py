@@ -67,13 +67,41 @@ def test_file_to_content_block_handles_spreadsheet():
     assert "Farmacia" in block["source"]["data"]
 
 
-def test_overview_splits_utilities_and_condominio():
-    """Verifica che lo split utenze/condominio usi UtilityType.CONDOMINIO."""
-    import inspect
+def test_dashboard_distinguishes_utilities_and_condominio():
+    """Le bollette delle utenze e le spese condominiali sono due categorie
+    distinte nella dashboard (etichette pubbliche diverse e non vuote)."""
+    from app.services import stats as stats_service
 
-    from app.services import bills as bills_service
+    util = stats_service.BILLS_CATEGORY_UTILITIES
+    condo = stats_service.BILLS_CATEGORY_CONDO
+    assert util and condo and util != condo
 
-    src = inspect.getsource(bills_service.overview)
-    assert "condo_total" in src
-    assert "utilities_total" in src
-    assert "CONDOMINIO" in src
+
+def test_split_total_keys_condominio_separately():
+    """_bills_split_total separa il condominio dalle altre utenze, attribuendo
+    ogni riga all'uno o all'altro gruppo in base a UtilityType.CONDOMINIO."""
+    import asyncio
+
+    from app.enums import UtilityType
+    from app.services import stats as stats_service
+
+    # Simula il risultato della query (utility_type, somma, conteggio) senza DB.
+    rows = [
+        (UtilityType.ENERGIA_ELETTRICA, 100.0, 2),
+        (UtilityType.GAS, 50.0, 1),
+        (UtilityType.CONDOMINIO, 300.0, 3),
+    ]
+
+    class _FakeResult:
+        def all(self):
+            return rows
+
+    class _FakeDB:
+        async def execute(self, _stmt):
+            return _FakeResult()
+
+    util_t, util_c, condo_t, condo_c = asyncio.run(
+        stats_service._bills_split_total(_FakeDB(), household_id=None)
+    )
+    assert (util_t, util_c) == (150.0, 3)
+    assert (condo_t, condo_c) == (300.0, 3)

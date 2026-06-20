@@ -164,7 +164,7 @@ async def overview(
     utilities_total, utilities_count = 0.0, 0
     condo_total, condo_count = 0.0, 0
     for utype, total, count in (await db.execute(split_stmt)).all():
-        if str(utype) == UtilityType.CONDOMINIO.value:
+        if utype == UtilityType.CONDOMINIO:
             condo_total += float(total or 0)
             condo_count += int(count or 0)
         else:

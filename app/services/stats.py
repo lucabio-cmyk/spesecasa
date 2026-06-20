@@ -168,7 +168,7 @@ async def _bills_split_total(
         stmt = stmt.where(Bill.fiscal_year == year)
     util_t, util_c, condo_t, condo_c = 0.0, 0, 0.0, 0
     for utype, total, count in (await db.execute(stmt)).all():
-        if str(utype) == UtilityType.CONDOMINIO.value:
+        if utype == UtilityType.CONDOMINIO:
             condo_t += float(total or 0)
             condo_c += int(count or 0)
         else:

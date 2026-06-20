@@ -109,11 +109,16 @@ def _format_rows(title: str, rows) -> str:
 def _xlsx_to_text(data: bytes) -> str:
     import openpyxl  # import lazy: dipendenza opzionale
 
+    # try/finally (anziché `with`): in alcune versioni openpyxl il Workbook non
+    # è un context manager, ma va comunque chiuso per liberare il file zip.
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-    blocks = [
-        _format_rows(ws.title, ws.iter_rows(values_only=True)) for ws in wb.worksheets
-    ]
-    wb.close()
+    try:
+        blocks = [
+            _format_rows(ws.title, ws.iter_rows(values_only=True))
+            for ws in wb.worksheets
+        ]
+    finally:
+        wb.close()
     return "\n\n".join(blocks)
 
 
