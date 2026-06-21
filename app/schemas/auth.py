@@ -107,8 +107,12 @@ class UserOut(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _derive_access(cls, data):
-        # Dal modello ORM ricava has_access: c'è accesso se ha una password.
-        if not isinstance(data, dict):
+        # has_access deriva dalla presenza della password, sia da modello ORM
+        # sia da dizionario (es. nei test o serializzazioni intermedie).
+        if isinstance(data, dict):
+            if "has_access" not in data:
+                data = {**data, "has_access": bool(data.get("hashed_password"))}
+        else:
             data = {
                 "id": data.id,
                 "email": data.email,

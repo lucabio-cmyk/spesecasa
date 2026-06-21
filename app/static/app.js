@@ -1425,6 +1425,9 @@ function editMemberDialog(member, isAdmin) {
     if (data.email && !hasAccess && !data.password) {
       toast("Per dare l'accesso serve anche una password", { type: "err" }); return;
     }
+    if (data.password && !hasAccess && !data.email) {
+      toast("Per dare l'accesso serve anche un'email", { type: "err" }); return;
+    }
     data.codice_fiscale = (data.codice_fiscale || "").trim().toUpperCase() || null;
     try {
       await api(`/household/members/${member.id}`, { method: "PATCH", body: data });
