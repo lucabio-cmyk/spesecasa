@@ -44,6 +44,54 @@ class BillStatus(StrEnum):
     RATEIZZATA = "rateizzata"
 
 
+class ReviewSeverity(StrEnum):
+    """Gravità di un avviso/proposta dell'agente di orchestrazione."""
+
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class ReviewStatus(StrEnum):
+    """Stato di una voce di revisione prodotta dall'agente di orchestrazione."""
+
+    PENDING = "pending"  # in attesa di decisione dell'utente
+    APPROVED = "approved"  # accettata (proposta applicata, vedi `applied`)
+    APPLIED = "applied"  # proposta accettata e modifica eseguita
+    REJECTED = "rejected"  # proposta rifiutata
+    DISMISSED = "dismissed"  # avviso ignorato/archiviato senza azione
+    FAILED = "failed"  # tentativo di applicazione fallito
+
+
+class ReviewKind(StrEnum):
+    """Tipo di voce di revisione. Determina come si applica un'eventuale azione
+    (payload) quando l'utente dà il consenso."""
+
+    RECONCILIATION = "reconciliation"  # somma righe != totale documento
+    MISSING_LINES = "missing_lines"  # documento con importo ma senza righe
+    SKIPPED_LINE = "skipped_line"  # riga non calcolata/illeggibile
+    MISSING_CLASSIFICATION = "missing_classification"  # classificazione da verificare
+    MISSING_ATTRIBUTION = "missing_attribution"  # manca pagante/beneficiario
+    POSSIBLE_DUPLICATE = "possible_duplicate"  # documento forse duplicato
+    PROCESSING_FAILED = "processing_failed"  # elaborazione non riuscita
+    RELIABILITY = "reliability"  # nota di affidabilità da rivedere
+    CATEGORY_PROPOSAL = "category_proposal"  # proposta di nuova categoria (consenso)
+    RECLASSIFICATION = "reclassification"  # proposta di riclassificazione (consenso)
+    ATTRIBUTION = "attribution"  # proposta di attribuzione soggetto (consenso)
+    INSIGHT = "insight"  # osservazione/anomalia informativa
+
+
+# Le voci che rappresentano una PROPOSTA con un'azione applicabile previo
+# consenso dell'utente (le altre sono avvisi informativi da prendere in carico).
+REVIEW_PROPOSAL_KINDS: frozenset[str] = frozenset(
+    {
+        ReviewKind.CATEGORY_PROPOSAL.value,
+        ReviewKind.RECLASSIFICATION.value,
+        ReviewKind.ATTRIBUTION.value,
+    }
+)
+
+
 class FiscalClassification(StrEnum):
     DETRAIBILE = "detraibile"
     DEDUCIBILE = "deducibile"

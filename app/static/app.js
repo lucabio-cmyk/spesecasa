@@ -252,6 +252,7 @@ const NAV = [
   { id: "analisi", icon: "📈", label: "Analisi" },
   { id: "upload", icon: "⬆️", label: "Carica documento" },
   { id: "documents", icon: "🗂️", label: "Archivio" },
+  { id: "revisione", icon: "🔍", label: "Revisione" },
   { id: "expenses", icon: "💶", label: "Spese" },
   { id: "bills", icon: "🏠", label: "Casa & Bollette" },
   { id: "chat", icon: "💬", label: "Assistente" },
@@ -279,7 +280,7 @@ function renderShell() {
         ${navItems().map(n => `
           <button class="nav-item ${State.view === n.id ? "active" : ""}" data-nav="${n.id}">
             <span class="ico">${n.icon}</span><span>${n.label}</span>
-            ${n.id === "documents" && reviewCount ? `<span class="badge-dot">${reviewCount}</span>` : ""}
+            ${n.id === "revisione" && reviewCount ? `<span class="badge-dot">${reviewCount}</span>` : ""}
           </button>`).join("")}
         <div class="spacer"></div>
         <button class="nav-item" id="theme-toggle"><span class="ico">${State.theme === "dark" ? "☀️" : "🌙"}</span><span>Tema ${State.theme === "dark" ? "chiaro" : "scuro"}</span></button>
@@ -322,6 +323,7 @@ function navigate(view) {
     analisi: ["Analisi", "Andamento mensile, esercenti, confronto tra anni e osservazioni automatiche"],
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
+    revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
     farmaci: ["Farmaci", "Catalogo dei medicinali acquistati · riservato all'amministratore"],
     bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
@@ -333,7 +335,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -441,8 +443,7 @@ async function viewDashboard() {
       api(`/stats/overview${yq}`), api(`/stats/by-category${yq}`), api(`/stats/by-member${yq}`),
       api(`/stats/by-scope${yq}`), api(`/stats/fiscal-summary${yq}`), api(`/stats/yearly`),
     ]);
-    State._reviewCount = ov.to_review;
-    updateReviewBadge(ov.to_review);
+    refreshReviewBadge();
 
     // Filtri di base condivisi dai drill-down: l'anno selezionato nella
     // dashboard si propaga alle viste filtrate.
@@ -793,6 +794,181 @@ async function openDocument(id) {
       catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
     });
   } catch (err) { toast("Errore", { desc: err.message, type: "err" }); closeModal(); }
+}
+
+/* ---------- View: Revisione (agente di orchestrazione) ---------- */
+const REVIEW_KIND_META = {
+  reconciliation:        { icon: "⚖️", label: "Righe ↔ totale", proposal: false },
+  missing_lines:         { icon: "🧮", label: "Righe mancanti", proposal: false },
+  skipped_line:          { icon: "❓", label: "Riga non calcolata", proposal: false },
+  missing_classification:{ icon: "🏷️", label: "Classificazione", proposal: false },
+  missing_attribution:   { icon: "👤", label: "Attribuzione", proposal: false },
+  possible_duplicate:    { icon: "📑", label: "Possibile duplicato", proposal: false },
+  processing_failed:     { icon: "🚫", label: "Elaborazione fallita", proposal: false },
+  reliability:           { icon: "🔎", label: "Da verificare", proposal: false },
+  category_proposal:     { icon: "🗂️", label: "Proposta categoria", proposal: true },
+  reclassification:      { icon: "🔁", label: "Riclassificazione", proposal: true },
+  attribution:          { icon: "🧑", label: "Attribuzione", proposal: true },
+  insight:               { icon: "💡", label: "Osservazione", proposal: false },
+};
+const SEV_META = {
+  critical: { color: "#b91c1c", bg: "var(--red-100, #fee2e2)", label: "Critico" },
+  warning:  { color: "#b45309", bg: "var(--amber-100)", label: "Avviso" },
+  info:     { color: "#1d4ed8", bg: "var(--blue-100)", label: "Info" },
+};
+let reviewStatusTab = "pending";
+
+async function viewRevisione() {
+  const c = $("#content");
+  c.innerHTML = skeletonRows();
+  // I cambi di tab richiamano viewRevisione() direttamente (non via navigate):
+  // svuota la topbar per non accumulare pulsanti "Verifica ora" duplicati.
+  $("#topbar-actions").innerHTML = "";
+  // Pulsante "Verifica ora" nella topbar.
+  const runBtn = document.createElement("button");
+  runBtn.className = "btn btn-primary";
+  runBtn.innerHTML = "🔍 Verifica ora";
+  runBtn.addEventListener("click", () => runReview(runBtn));
+  $("#topbar-actions").appendChild(runBtn);
+
+  try {
+    const [summary, items] = await Promise.all([
+      api("/review/summary"),
+      api(`/review?status_filter=${reviewStatusTab}`),
+    ]);
+    updateReviewBadge(summary.pending || 0);
+
+    const intro = `<div class="card card-pad" style="border-left:4px solid var(--teal-600,#0d9488);margin-bottom:16px">
+        <div class="row" style="gap:12px;align-items:flex-start">
+          <span style="font-size:22px">🤖</span>
+          <div><b>Agente di revisione</b>
+            <div class="sub" style="color:var(--text-soft);font-size:13px">Controlla automaticamente che le righe quadrino con i totali, segnala ciò che non è stato calcolato o gestito correttamente e propone categorie/riclassificazioni migliori, applicate solo col tuo consenso. Gira dopo ogni caricamento; puoi anche avviarlo a mano.</div>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px">
+          ${reviewChip("🚫", summary.critical, "critici", "#b91c1c")}
+          ${reviewChip("⚠️", summary.warning, "avvisi", "#b45309")}
+          ${reviewChip("ℹ️", summary.info, "info", "#1d4ed8")}
+          ${reviewChip("💡", summary.proposals, "proposte", "#0d9488")}
+        </div>
+      </div>`;
+
+    const tabs = `<div class="filters" style="margin-bottom:12px">
+        ${["pending", "applied", "dismissed"].map(s => `
+          <button class="btn ${reviewStatusTab === s ? "btn-primary" : ""}" data-tab="${s}">
+            ${ {pending:"Da gestire", applied:"Applicate", dismissed:"Archiviate"}[s] }
+          </button>`).join("")}
+      </div>`;
+
+    let body;
+    if (!items.length) {
+      body = reviewStatusTab === "pending"
+        ? `<div class="card card-pad empty"><div class="big">✅</div><h3>Tutto in ordine</h3><p>Nessun avviso o proposta in sospeso. L'agente segnalerà qui eventuali righe non calcolate, totali che non quadrano o miglioramenti possibili.</p><button class="btn btn-primary" id="rev-run-empty" style="margin-top:14px">🔍 Verifica ora</button></div>`
+        : `<div class="card card-pad empty"><div class="big">📭</div><h3>Nessuna voce</h3><p>Non ci sono voci in questo stato.</p></div>`;
+    } else {
+      body = `<div class="review-list" style="display:flex;flex-direction:column;gap:10px">
+        ${items.map(reviewCard).join("")}</div>`;
+    }
+
+    c.innerHTML = intro + tabs + body;
+
+    c.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => {
+      reviewStatusTab = b.dataset.tab; viewRevisione();
+    }));
+    $("#rev-run-empty")?.addEventListener("click", () => runReview($("#rev-run-empty")));
+    bindReviewActions(c);
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
+}
+
+function reviewChip(icon, n, label, color) {
+  if (!n) return "";
+  return `<span class="badge" style="background:${color}1a;color:${color};border:1px solid ${color}33">${icon} ${n} ${label}</span>`;
+}
+
+function reviewCard(it) {
+  const meta = REVIEW_KIND_META[it.kind] || { icon: "•", label: it.kind, proposal: false };
+  const sev = SEV_META[it.severity] || SEV_META.info;
+  const isProposal = meta.proposal;
+  const open = it.status === "pending";
+  // Link al documento/spesa di riferimento.
+  let goBtn = "";
+  if (it.target_type === "document" && it.target_id) {
+    goBtn = `<button class="btn" data-rev-open="document" data-rev-target="${it.target_id}">Apri documento</button>`;
+  } else if (it.target_type === "expense" && it.target_id) {
+    goBtn = `<button class="btn" data-rev-open="expense" data-rev-target="${it.target_id}">Vai alle spese</button>`;
+  }
+  let actions = "";
+  if (open) {
+    if (isProposal) {
+      actions = `
+        <button class="btn btn-primary" data-rev-act="approve" data-rev-id="${it.id}">✓ Approva e applica</button>
+        <button class="btn" data-rev-act="reject" data-rev-id="${it.id}">Rifiuta</button>`;
+    } else {
+      actions = `
+        ${goBtn}
+        <button class="btn btn-primary" data-rev-act="approve" data-rev-id="${it.id}">Segna come gestito</button>
+        <button class="btn" data-rev-act="dismiss" data-rev-id="${it.id}">Archivia</button>`;
+    }
+  } else {
+    actions = `${goBtn}<span class="hint">${it.resolution_note ? esc(it.resolution_note) : (it.status === "rejected" ? "Rifiutata" : it.status === "dismissed" ? "Archiviata" : "Applicata")}</span>`;
+  }
+  return `<div class="card card-pad" style="border-left:4px solid ${sev.color}">
+      <div class="row between" style="align-items:flex-start;gap:12px">
+        <div style="flex:1">
+          <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+            <span style="font-size:18px">${meta.icon}</span>
+            <b>${esc(it.title)}</b>
+            <span class="badge" style="background:${sev.bg};color:${sev.color}">${meta.label}</span>
+            ${isProposal ? `<span class="badge" style="background:#0d948815;color:#0d9488">richiede consenso</span>` : ""}
+            ${it.fiscal_year ? `<span class="hint">${it.fiscal_year}</span>` : ""}
+          </div>
+          ${it.detail ? `<div class="sub" style="color:var(--text-soft);font-size:13px;margin-top:6px;white-space:pre-wrap">${esc(it.detail)}</div>` : ""}
+        </div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">${actions}</div>
+    </div>`;
+}
+
+function bindReviewActions(wrap) {
+  wrap.querySelectorAll("[data-rev-act]").forEach(b => b.addEventListener("click", async () => {
+    const id = b.dataset.revId, act = b.dataset.revAct;
+    b.disabled = true;
+    try {
+      await api(`/review/${id}/${act}`, { method: "POST" });
+      const msg = { approve: "Applicato", reject: "Proposta rifiutata", dismiss: "Avviso archiviato" }[act];
+      toast(msg, { type: "ok", timeout: 1800 });
+      refreshReviewBadge();
+      viewRevisione();
+    } catch (err) {
+      b.disabled = false;
+      toast("Errore", { desc: err.message, type: "err" });
+    }
+  }));
+  wrap.querySelectorAll("[data-rev-open]").forEach(b => b.addEventListener("click", () => {
+    const type = b.dataset.revOpen;
+    if (type === "document") { openDocument(b.dataset.revTarget); }
+    else { navigate("expenses"); }
+  }));
+}
+
+async function runReview(btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = "⏳ Analisi in corso…"; }
+  try {
+    const res = await api("/review/run", { method: "POST" });
+    const found = (res.checks_findings || 0) + (res.proposals || 0);
+    toast("Revisione completata", {
+      desc: found ? `${res.pending_total} voci da gestire` : "Nessun nuovo problema rilevato",
+      type: "ok",
+    });
+    reviewStatusTab = "pending";
+    refreshReviewBadge();
+    viewRevisione();
+  } catch (err) {
+    toast("Errore", { desc: err.message, type: "err" });
+    if (btn) { btn.disabled = false; btn.innerHTML = "🔍 Verifica ora"; }
+  }
 }
 
 /* ---------- View: Expenses ---------- */
@@ -1463,13 +1639,22 @@ function errorBox(msg) { return `<div class="card card-pad empty"><div class="bi
 function indexMembers() { State.membersById = Object.fromEntries(State.members.map(m => [m.id, m])); }
 
 function updateReviewBadge(count) {
-  const item = $(".nav-item[data-nav=documents]");
+  State._reviewCount = count;
+  const item = $(".nav-item[data-nav=revisione]");
   if (!item) return;
   let dot = item.querySelector(".badge-dot");
   if (count > 0) {
     if (!dot) { dot = document.createElement("span"); dot.className = "badge-dot"; item.appendChild(dot); }
     dot.textContent = count;
   } else if (dot) { dot.remove(); }
+}
+
+// Aggiorna il badge "Revisione" col numero di voci ancora aperte (pending).
+async function refreshReviewBadge() {
+  try {
+    const s = await api("/review/summary");
+    updateReviewBadge(s.pending || 0);
+  } catch { /* il badge non è critico */ }
 }
 
 /* ---------- Boot ---------- */
@@ -1492,6 +1677,7 @@ async function boot() {
     State.units = units || [];
     if (hh) State.user.household_name = hh.name;
     renderShell();
+    refreshReviewBadge();
     navigate(State.view || "dashboard");
   } catch (err) {
     logout(true);

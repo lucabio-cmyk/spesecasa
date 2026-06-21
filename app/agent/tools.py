@@ -642,9 +642,20 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             if not doc:
                 return {"ok": False, "error": "documento non trovato"}
             inserted = 0
+            skipped: list[str] = []
             for line in tool_input.get("lines", []):
                 amount = to_decimal(line.get("line_amount"))
                 if amount is None:
+                    # Riga senza importo calcolabile: non si inventa un valore, ma
+                    # NON la si perde in silenzio — la si segnala come riga non
+                    # calcolata, così la revisione può avvisare l'utente.
+                    desc = (
+                        line.get("description_normalized")
+                        or line.get("description_original")
+                        or line.get("merch_category")
+                        or "riga senza descrizione"
+                    )
+                    skipped.append(str(desc)[:80])
                     continue
                 pdate = to_date(line.get("purchase_date")) or (doc.doc_date if doc else None)
                 fyear = line.get("fiscal_year")
@@ -687,10 +698,26 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 ctx.household_id,
                 (line.get("merch_category") for line in tool_input.get("lines", [])),
             )
+            # Annota sul documento le righe non calcolate, così l'agente di
+            # orchestrazione le segnala (avviso "righe non gestite correttamente").
+            if skipped and doc is not None:
+                msg = (
+                    f"{len(skipped)} righe senza importo calcolabile non registrate: "
+                    + "; ".join(skipped[:10])
+                )
+                doc.reliability_note = (
+                    f"{doc.reliability_note}\n{msg}" if doc.reliability_note else msg
+                )
             await db.commit()
             result = {"ok": True, "inserted": inserted}
             if new_categories:
                 result["new_categories"] = new_categories
+            if skipped:
+                result["skipped_lines"] = skipped
+                result["note"] = (
+                    "Alcune righe non avevano un importo leggibile e non sono state "
+                    "registrate: sono state annotate per la revisione."
+                )
             return result
 
         if name == "record_expense":
