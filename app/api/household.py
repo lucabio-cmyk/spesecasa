@@ -9,7 +9,7 @@ from app.enums import UserRole
 from app.models.household import Household
 from app.models.property_unit import PropertyUnit
 from app.models.user import User
-from app.schemas.auth import MemberInvite, MemberUpdate, UserOut
+from app.schemas.auth import MemberInvite, UserOut
 from app.schemas.property_unit import (
     HouseholdSettingsUpdate,
     PropertyUnitCreate,
@@ -89,72 +89,6 @@ async def add_member(body: MemberInvite, user: CurrentUser, db: DB):
     )
     db.add(member)
     await db.commit()
-    await db.refresh(member)
-    return member
-
-
-@router.patch("/members/{member_id}", response_model=UserOut)
-async def update_member(
-    member_id: uuid.UUID, body: MemberUpdate, user: CurrentUser, db: DB
-):
-    """Modifica un membro dopo la creazione (es. aggiunta del codice fiscale).
-
-    L'amministratore può modificare qualsiasi membro del nucleo; un membro può
-    modificare solo i propri dati e non può cambiare il proprio ruolo."""
-    is_admin = user.role == UserRole.ADMIN
-    if not is_admin and member_id != user.id:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Puoi modificare solo i tuoi dati",
-        )
-    member = await db.get(User, member_id)
-    if not member or member.household_id != user.household_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Membro non trovato")
-
-    data = body.model_dump(exclude_unset=True)
-
-    if "role" in data and data["role"] is not None:
-        if not is_admin:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN, "Solo l'amministratore può cambiare i ruoli"
-            )
-        # Non lasciare il nucleo senza amministratori.
-        if member.role == UserRole.ADMIN and data["role"] != UserRole.ADMIN:
-            res = await db.execute(
-                select(User).where(
-                    User.household_id == user.household_id, User.role == UserRole.ADMIN
-                )
-            )
-            admins = list(res.scalars())
-            if len(admins) <= 1:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    "Il nucleo deve avere almeno un amministratore",
-                )
-        member.role = data["role"]
-
-    if "email" in data and data["email"] is not None:
-        if data["email"] != member.email:
-            exists = await db.execute(select(User).where(User.email == data["email"]))
-            if exists.scalars().first():
-                raise HTTPException(status.HTTP_409_CONFLICT, "Email già registrata")
-            member.email = data["email"]
-
-    if "full_name" in data and data["full_name"]:
-        member.full_name = data["full_name"]
-
-    if "codice_fiscale" in data:
-        cf = data["codice_fiscale"]
-        member.codice_fiscale = (cf.strip().upper() or None) if cf else None
-
-    if "password" in data and data["password"]:
-        member.hashed_password = hash_password(data["password"])
-
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email già registrata")
     await db.refresh(member)
     return member
 
