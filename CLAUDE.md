@@ -108,9 +108,7 @@ soggetto e archivia.
   `/auth/me`.
 - `household`: `GET /household` (info + addestramento), `PATCH /household`
   (nome + `agent_instructions`, admin), `GET/POST /household/members`,
-  `PATCH /household/members/{id}` (modifica dati membro post-creazione, es.
-  codice fiscale: admin su tutti, ciascun membro su se stesso; il ruolo solo
-  admin), `DELETE /household/members/{id}`, `GET/POST /household/units`,
+  `DELETE /household/members/{id}`, `GET/POST /household/units`,
   `PATCH/DELETE /household/units/{id}` (unità immobiliari, gestione admin).
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
