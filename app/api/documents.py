@@ -24,11 +24,33 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 async def _process(document_id: uuid.UUID) -> None:
     # Import locale per evitare l'inizializzazione del client Anthropic all'avvio.
     from app.agent.runner import process_document
+    from app.config import settings as _settings
 
+    household_id = None
     async with SessionLocal() as db:
         doc = await db.get(Document, document_id)
         if doc:
+            household_id = doc.household_id
             await process_document(db, doc)
+
+    # A elaborazione conclusa, l'agente di orchestrazione verifica il documento
+    # (righe ↔ totale, classificazione, attribuzione) e segnala ciò che non è
+    # stato calcolato/gestito correttamente. Best-effort: non deve far fallire
+    # l'upload.
+    if (
+        household_id is not None
+        and _settings.enable_orchestrator
+        and _settings.orchestrator_run_after_upload
+    ):
+        from app.services import orchestrator
+
+        async with SessionLocal() as db:
+            try:
+                await orchestrator.run_orchestration(
+                    db, household_id, document_id=document_id, use_llm=False
+                )
+            except Exception:
+                await db.rollback()
 
 
 @router.post("", response_model=DocumentOut, status_code=201)

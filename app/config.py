@@ -91,6 +91,21 @@ class Settings(BaseSettings):
     # disattivata. Impostalo come variabile d'ambiente del deploy.
     admin_recovery_key: str = ""
 
+    # Agente di orchestrazione (revisione in background dell'archivio).
+    # Verifica la coerenza dei dati (righe ↔ totali, classificazioni, duplicati),
+    # segnala ciò che non è stato calcolato/gestito correttamente e propone
+    # miglioramenti (categorie, riclassificazioni) da applicare previo consenso.
+    enable_orchestrator: bool = True
+    # Esegue automaticamente una revisione mirata al termine di ogni upload.
+    orchestrator_run_after_upload: bool = True
+    # Abilita la fase LLM (proposte intelligenti di categorie/riclassificazioni);
+    # se disattiva o senza API key, restano le sole verifiche deterministiche.
+    orchestrator_use_llm: bool = True
+    orchestrator_max_tool_iterations: int = 12
+    # Scheduler periodico (loop asyncio interno): off di default per non
+    # introdurre costi/run a sorpresa. In ore; 0 = disattivato.
+    orchestrator_schedule_hours: int = 0
+
     # Storage
     storage_backend: str = "local"
     storage_dir: str = "/data/documents"

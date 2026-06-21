@@ -106,6 +106,28 @@ soggetto e archivia.
   `UserOut.has_access` indica se il membro può accedere. L'accesso può essere
   aggiunto in seguito da `PATCH /household/members/{id}`. Il login rifiuta gli
   utenti senza password.
+- **Agente di orchestrazione / Revisione** (`app/services/orchestrator.py`,
+  `app/api/review.py`, `app/models/review.py:ReviewItem`, sezione "Revisione"
+  della GUI): un agente in background che (1) con **verifiche deterministiche**
+  controlla la coerenza dei dati già archiviati e segnala ciò che NON è stato
+  calcolato/gestito correttamente — somma righe ≠ totale documento
+  (`reconciliation`), documenti con importo ma senza righe (`missing_lines`),
+  righe non calcolate/illeggibili (`skipped_line`, alimentato anche da
+  `add_expenses` che annota nella `reliability_note` le righe senza importo),
+  classificazioni `da_verificare`, attribuzioni mancanti, possibili duplicati
+  (stesso emittente+data+totale), elaborazioni fallite, note di affidabilità; e
+  (2) con una **fase LLM** opzionale (`orchestrator_use_llm`) PROPONE
+  miglioramenti — nuove categorie/accorpamenti, riclassificazioni, osservazioni
+  — tramite tool `propose_category`/`propose_reclassification`/`flag_insight`.
+  Ogni esito è una `ReviewItem` (kind/severity/status/payload) deduplicata per
+  `signature` (una decisione già presa dall'utente non viene riproposta). Le
+  **proposte si applicano SOLO previo consenso** (`POST /review/{id}/approve` →
+  `orchestrator.apply_review_item`: crea la categoria ed eventualmente sposta le
+  spese, oppure riclassifica/attribuisce). Esecuzione: su richiesta
+  (`POST /review/run`), automatica dopo ogni upload
+  (`orchestrator_run_after_upload`, scope sul singolo documento, senza LLM) e
+  scheduler periodico interno opzionale (`orchestrator_schedule_hours`, loop
+  asyncio in `app/main.py`, off di default). Config in `app/config.py`.
 - **Storage** (`app/services/storage.py`): `LocalStorage` su volume; S3 da fare.
 - **Ricerca semantica** (`app/services/embeddings.py`, `app/services/search.py`):
   l'embedding del documento (header + sintesi + voci) è calcolato a fine pipeline
@@ -143,6 +165,10 @@ soggetto e archivia.
 - `ExpenseCategory`(household_id, name (normalizzato, unico per nucleo),
   description, examples (JSONB), source `agent`/`user`, active). Categorie
   merceologiche PERSONALIZZATE del nucleo, oltre a quelle di base.
+- `ReviewItem`(household_id, kind, severity, status, title, detail, signature,
+  target_type/target_id, fiscal_year, payload (JSONB: azione applicabile su
+  consenso), source, resolved_at/by, resolution_note). Avvisi e proposte
+  dell'agente di orchestrazione (vedi Architettura → Revisione).
 - Enum salvati come VARCHAR (vedi `app/models/base.py:enum_col`).
 - Categorie merceologiche di base in `app/enums.py:MERCHANDISE_CATEGORIES`
   (descrizioni in `MERCHANDISE_CATEGORY_INFO`), estendibili per nucleo via
@@ -188,6 +214,11 @@ soggetto e archivia.
   unitario). Nella GUI la sezione **Analisi** (`viewAnalisi`) mostra insight,
   andamento mensile, top esercenti e tabella di confronto tra anni.
 - `chat`: `POST /chat` (agente conversazionale sullo storico).
+- `review`: `POST /review/run` (avvia la revisione), `GET /review` (voci, filtro
+  per stato/gravità/anno; default `pending`), `GET /review/summary` (conteggi per
+  il badge), `POST /review/{id}/approve|reject|dismiss` (consenso: applica la
+  proposta / rifiuta / archivia l'avviso). Voci prodotte dall'agente di
+  orchestrazione (`ReviewItem`).
 
 ## Variabili d'ambiente
 Vedi `.env.example`. Minime per girare: `DATABASE_URL`, `ANTHROPIC_API_KEY`,
