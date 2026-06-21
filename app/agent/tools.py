@@ -722,8 +722,9 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 beneficiary = await resolve_member_id(db, ctx.household_id, line.get("beneficiary"))
                 line_payer = payer or (doc.payer_user_id if doc else None)
                 # Metodo di pagamento: override di riga, altrimenti quello del documento.
+                pm_ref = line.get("payment_method_id") or line.get("payment_method")
                 pm_id = await resolve_payment_method_id(
-                    db, ctx.household_id, line.get("payment_method_id"), line_payer
+                    db, ctx.household_id, pm_ref, line_payer
                 ) or (doc.payment_method_id if doc else None)
                 expense = Expense(
                     household_id=ctx.household_id,

@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.enums import PAYMENT_METHOD_TYPE_INFO
 from app.models.document import Document
 from app.models.payment_method import PaymentMethod
 from app.models.property_unit import PropertyUnit
@@ -123,9 +124,12 @@ async def resolve_payment_method_id(
     methods = list(res.scalars())
     matches = []
     for pm in methods:
+        # Includi anche l'etichetta leggibile (es. "Carta di credito") oltre al
+        # valore grezzo dell'enum, così i termini naturali in italiano matchano.
+        type_friendly = PAYMENT_METHOD_TYPE_INFO.get(str(pm.method_type), "")
         haystack = " ".join(
             p.lower()
-            for p in (pm.label, str(pm.method_type), pm.provider, pm.last4)
+            for p in (pm.label, str(pm.method_type), type_friendly, pm.provider, pm.last4)
             if p
         )
         if needle in haystack or (pm.last4 and pm.last4 in needle):
