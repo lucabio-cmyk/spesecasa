@@ -85,6 +85,14 @@ async def upcoming(user: CurrentUser, db: DB):
     return await bills_service.upcoming(db, user.household_id)
 
 
+@router.get("/monthly")
+async def monthly(user: CurrentUser, db: DB, year: int | None = None):
+    """Andamento mensile delle bollette per l'anno indicato (default: corrente)."""
+    return await bills_service.monthly(
+        db, user.household_id, year or date.today().year
+    )
+
+
 @router.get("/export.csv")
 async def export_csv(user: CurrentUser, db: DB, year: int | None = None):
     """Esporta le bollette in CSV per archivio/amministrazione."""

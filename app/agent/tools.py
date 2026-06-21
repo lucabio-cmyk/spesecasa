@@ -341,18 +341,28 @@ TOOLS = [
                 "utility_type": {"type": "string", "enum": _UTILITY},
                 "property_unit": {"type": "string", "description": "limita l'analisi a un'unità immobiliare (nome, alias o id)"},
                 "include_upcoming": {"type": "boolean", "description": "includi lo scadenzario"},
+                "include_monthly": {"type": "boolean", "description": "includi l'andamento mensile (richiede fiscal_year)"},
             },
         },
     },
     {
         "name": "query_expenses",
-        "description": "Interroga lo storico spese del nucleo con filtri e restituisce aggregati (totale, per categoria, per classificazione fiscale).",
+        "description": (
+            "Interroga lo storico spese del nucleo e restituisce aggregati (totale, per "
+            "categoria, per classificazione fiscale). Opzionalmente arricchisce con "
+            "l'andamento mensile, gli esercenti su cui si spende di più e il confronto con "
+            "l'anno precedente. Usalo per domande tipo 'quanto ho speso?', 'in che mese "
+            "spendo di più?', 'dove spendo di più?', 'rispetto all'anno scorso?'."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "fiscal_year": {"type": "integer"},
                 "category": {"type": "string"},
                 "classification": {"type": "string", "enum": _FISCAL},
+                "include_monthly": {"type": "boolean", "description": "includi l'andamento mensile (richiede fiscal_year)"},
+                "include_top_merchants": {"type": "boolean", "description": "includi gli esercenti su cui si spende di più"},
+                "include_comparison": {"type": "boolean", "description": "includi il confronto con l'anno precedente (richiede fiscal_year)"},
             },
         },
     },
@@ -403,6 +413,23 @@ TOOLS = [
                 "subject": {"type": "string", "description": "nome o id del soggetto"},
             },
             "required": ["fiscal_year"],
+        },
+    },
+    {
+        "name": "get_insights",
+        "description": (
+            "Restituisce osservazioni automatiche sulla situazione di spesa del nucleo per "
+            "l'anno indicato (default: anno corrente): variazioni rispetto all'anno "
+            "precedente, voci principali, categorie in crescita, potenziale fiscale, "
+            "spese da verificare, documenti da rivedere e scadenze di pagamento. Usalo per "
+            "domande tipo 'come vanno le mie spese?', 'cosa devo tenere d'occhio?', "
+            "'dammi un'analisi della situazione'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fiscal_year": {"type": "integer", "description": "anno di riferimento (default: corrente)"},
+            },
         },
     },
 ]
@@ -825,18 +852,34 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 result["upcoming"] = await bills_service.upcoming(
                     db, ctx.household_id, unit_id=unit_id
                 )
+            if tool_input.get("include_monthly") and year:
+                result["monthly"] = await bills_service.monthly(
+                    db, ctx.household_id, year, unit_id
+                )
             return result
 
         if name == "query_expenses":
             year = tool_input.get("fiscal_year")
+            year = int(year) if year else None
             by_cat = await stats_service.by_category(db, ctx.household_id, year)
             if not ctx.is_admin:
                 # Nascondi l'aggregato dei farmaci ai non-amministratori.
                 by_cat = [r for r in by_cat if r["category"] not in SENSITIVE_CATEGORIES]
-            return {
+            result = {
                 "by_category": by_cat,
                 "fiscal_summary": await stats_service.fiscal_summary(db, ctx.household_id, year),
             }
+            if tool_input.get("include_monthly") and year:
+                result["monthly"] = await stats_service.monthly(db, ctx.household_id, year)
+            if tool_input.get("include_top_merchants"):
+                result["top_merchants"] = await stats_service.top_merchants(
+                    db, ctx.household_id, year, is_admin=ctx.is_admin
+                )
+            if tool_input.get("include_comparison") and year:
+                result["comparison"] = await stats_service.compare_years(
+                    db, ctx.household_id, year, ctx.is_admin
+                )
+            return result
 
         if name == "get_yearly_summary":
             year = int(tool_input["fiscal_year"])
@@ -844,6 +887,18 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 "year": year,
                 "fiscal_summary": await stats_service.fiscal_summary(db, ctx.household_id, year),
                 "by_member": await stats_service.by_member(db, ctx.household_id, year),
+            }
+
+        if name == "get_insights":
+            from datetime import date
+
+            year = tool_input.get("fiscal_year")
+            year = int(year) if year else date.today().year
+            return {
+                "year": year,
+                "insights": await stats_service.insights(
+                    db, ctx.household_id, year, ctx.is_admin
+                ),
             }
 
         return {"error": f"strumento sconosciuto: {name}"}

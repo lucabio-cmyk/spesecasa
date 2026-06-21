@@ -249,6 +249,7 @@ function renderAuth(mode = "login") {
 /* ---------- App shell ---------- */
 const NAV = [
   { id: "dashboard", icon: "📊", label: "Dashboard" },
+  { id: "analisi", icon: "📈", label: "Analisi" },
   { id: "upload", icon: "⬆️", label: "Carica documento" },
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "expenses", icon: "💶", label: "Spese" },
@@ -318,6 +319,7 @@ function navigate(view) {
   app().querySelectorAll("[data-nav]").forEach(b => b.classList.toggle("active", b.dataset.nav === view));
   const titles = {
     dashboard: ["Dashboard", "Panoramica delle spese e dei documenti del nucleo"],
+    analisi: ["Analisi", "Andamento mensile, esercenti, confronto tra anni e osservazioni automatiche"],
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
@@ -331,7 +333,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -493,6 +495,83 @@ async function viewDashboard() {
 
     c.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => navigate(b.dataset.go)));
     bindDrills(c);
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
+}
+
+/* ---------- View: Analisi (analisi avanzate) ---------- */
+function pctBadge(pct, { invert = false } = {}) {
+  // invert=false: per la SPESA un aumento (pct>0) è "negativo" (rosso),
+  // un calo è "positivo" (verde).
+  if (pct === null || pct === undefined) return `<span class="hint">—</span>`;
+  const up = pct > 0;
+  const good = invert ? up : !up;
+  const color = pct === 0 ? "var(--text-faint)" : good ? "#15803d" : "#dc2626";
+  const arrow = pct === 0 ? "→" : up ? "▲" : "▼";
+  return `<span style="color:${color};font-weight:700;white-space:nowrap">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+}
+
+function insightCard(i) {
+  const bg = { positive: "var(--green-100)", warning: "var(--amber-100)", info: "var(--blue-100)" }[i.severity] || "var(--blue-100)";
+  const fg = { positive: "#15803d", warning: "#b45309", info: "#1d4ed8" }[i.severity] || "#1d4ed8";
+  return `<div class="card card-pad" style="display:flex;gap:12px;align-items:flex-start">
+      <span class="ico-box" style="background:${bg};color:${fg};flex-shrink:0">${i.icon || "💡"}</span>
+      <div><b>${esc(i.title)}</b><div class="sub" style="color:var(--text-soft);font-size:13px;margin-top:2px">${esc(i.detail || "")}</div></div>
+    </div>`;
+}
+
+async function viewAnalisi() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  $("#topbar-actions").appendChild(await yearSelector(viewAnalisi));
+  // Le analisi mensili/confronto/insight sono per anno: se "Tutti gli anni" è
+  // selezionato, usiamo l'anno corrente come riferimento.
+  const year = State.year || new Date().getFullYear();
+  const yq = `?year=${year}`;
+  try {
+    const [insights, monthly, top, cmp] = await Promise.all([
+      api(`/stats/insights${yq}`),
+      api(`/stats/monthly${yq}`),
+      api(`/stats/top-merchants${yq}&limit=10`),
+      api(`/stats/compare${yq}`),
+    ]);
+
+    const monthRows = monthly.map(m => ({ label: m.label, total: m.total }));
+    const merchRows = top.map(m => ({ label: m.merchant, total: m.total }));
+    const cmpRows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0).slice(0, 12);
+
+    const kpis = [
+      { label: `Totale ${year}`, value: eur(cmp.current_total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${cmp.by_category.length} categori${cmp.by_category.length === 1 ? "a" : "e"}` },
+      { label: `Totale ${cmp.previous_year}`, value: eur(cmp.previous_total), icon: "🗓️", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "anno precedente" },
+      { label: "Variazione", value: cmp.delta_pct === null ? "—" : `${cmp.delta_pct > 0 ? "+" : ""}${cmp.delta_pct.toFixed(1)}%`, icon: cmp.delta >= 0 ? "📈" : "📉", bg: cmp.delta >= 0 ? "var(--amber-100)" : "var(--green-100)", fg: cmp.delta >= 0 ? "#b45309" : "#15803d", delta: `${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)} sul ${cmp.previous_year}` },
+      { label: "Osservazioni", value: insights.length, icon: "💡", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "rilevate per il periodo" },
+    ];
+
+    const cmpTable = cmpRows.length ? `<div class="table-wrap"><table class="data">
+        <thead><tr><th>Categoria</th><th class="num">${year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
+        <tbody>${cmpRows.map(r => `<tr>
+            <td>${esc(r.category)}</td>
+            <td class="num">${eur(r.current)}</td>
+            <td class="num" style="color:var(--text-soft)">${eur(r.previous)}</td>
+            <td class="num">${pctBadge(r.delta_pct)}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>` : `<div class="empty"><div class="big">📭</div><p>Nessun dato da confrontare.</p></div>`;
+
+    c.innerHTML = `
+      ${kpiGrid(kpis)}
+
+      <div class="card card-pad" style="margin-top:16px">
+        <div class="row between" style="margin-bottom:16px"><h3>Osservazioni automatiche</h3><span class="hint">Anno ${year}</span></div>
+        <div class="grid cols-2" style="gap:12px">${insights.map(insightCard).join("")}</div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:16px">
+        ${chartCard(`Andamento mensile ${year}`, barChart(monthRows, { labelKey: "label", valueKey: "total" }), { sub: "Spese + bollette per mese" })}
+        ${chartCard("Dove spendi di più", barChart(merchRows, { labelKey: "label", valueKey: "total" }), { sub: "Esercenti/fornitori per importo totale" })}
+      </div>
+
+      ${chartCard(`Confronto ${cmp.previous_year} → ${year}`, cmpTable, { action: `<span class="hint">Variazione per categoria</span>`, style: "margin-top:16px" })}`;
   } catch (err) {
     c.innerHTML = errorBox(err.message);
   }

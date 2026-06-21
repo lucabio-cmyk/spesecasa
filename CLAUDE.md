@@ -30,8 +30,11 @@ soggetto e archivia.
   originale archiviato — PDF/immagine — per analizzarlo di nuovo su richiesta),
   `save_document` (header), `add_expenses` (righe/movimenti), `record_expense`
   (spesa da chat), `find_expenses`/`delete_expense` (ricerca e cancellazione
-  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`,
-  `query_bills`, `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e
+  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`
+  (aggregati + opzioni `include_monthly`/`include_top_merchants`/`include_comparison`),
+  `query_bills` (costi/andamento/scadenzario + `include_monthly`),
+  `get_yearly_summary`, `get_insights` (osservazioni automatiche sull'anno). Il
+  dispatcher risolve i nomi soggetto→id e
   calcola l'anno fiscale. `read_document` restituisce il file come blocco
   contenuto: il runner lo allega alla risposta dello strumento (chiave
   `_content_blocks`) così il modello può vederlo subito.
@@ -141,7 +144,18 @@ soggetto e archivia.
 - `bills`: `GET/POST /bills`, `GET/PATCH/DELETE /bills/{id}`,
   `POST /bills/{id}/pay`, `/bills/overview|analysis|trend|upcoming|export.csv`.
   Le bollette possono essere collegate a una `PropertyUnit` (`property_unit_id`).
-- `stats`: `/stats/by-category|by-member|by-scope|yearly|fiscal-summary`.
+- `stats`: `/stats/overview|by-category|by-member|by-scope|yearly|fiscal-summary|
+  fiscal-by-member|export.csv`. **Analisi avanzate** (`app/services/stats.py`):
+  `/stats/monthly` (andamento mese per mese di spese+bollette), `/stats/top-merchants`
+  (esercenti su cui si spende di più), `/stats/compare` (confronto con l'anno
+  precedente per categoria), `/stats/insights` (osservazioni automatiche:
+  variazioni, voci principali/in crescita, potenziale fiscale, spese da
+  verificare, documenti da rivedere, scadenze). Gli endpoint per-anno usano
+  l'anno corrente come default; `top-merchants`/`compare`/`insights` rispettano
+  la riservatezza dei farmaci per i non-admin. Lato bollette: `/bills/monthly`
+  e `/bills/analysis` (ora con confronto anno-su-anno: spesa, consumo e costo
+  unitario). Nella GUI la sezione **Analisi** (`viewAnalisi`) mostra insight,
+  andamento mensile, top esercenti e tabella di confronto tra anni.
 - `chat`: `POST /chat` (agente conversazionale sullo storico).
 
 ## Variabili d'ambiente

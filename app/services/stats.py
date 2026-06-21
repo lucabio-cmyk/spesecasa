@@ -4,11 +4,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.enums import UtilityType
+from app.enums import SENSITIVE_CATEGORIES, UtilityType
 from app.models.bill import Bill
 from app.models.document import Document
 from app.models.expense import Expense
 from app.models.user import User
+from app.services import bills as bills_service
+
+_SENSITIVE = list(SENSITIVE_CATEGORIES)
 
 # Categorie con cui le bollette/spese di casa compaiono nelle viste aggregate
 # della dashboard, così da contare *tutte* le spese senza confonderle con le
@@ -271,3 +274,313 @@ async def fiscal_by_member(db: AsyncSession, household_id: uuid.UUID, year: int 
         }
         for name, cf, c, t, n in res.all()
     ]
+
+
+# ---------------------------------------------------------------------------
+# Analisi avanzate: andamento mensile, esercenti più frequenti, confronto tra
+# anni e "insight" automatici. Pensate per arricchire la dashboard e dare al
+# nucleo una lettura più completa delle proprie spese (oltre ai totali).
+# ---------------------------------------------------------------------------
+
+# Etichette dei mesi (italiano) per le viste/export, indicizzate 1..12.
+MONTH_LABELS: list[str] = [
+    "", "Gen", "Feb", "Mar", "Apr", "Mag", "Giu",
+    "Lug", "Ago", "Set", "Ott", "Nov", "Dic",
+]
+
+
+def _pct_change(current: float, previous: float) -> float | None:
+    """Variazione percentuale current vs previous (None se base nulla)."""
+    if not previous:
+        return None
+    return round((current - previous) / previous * 100, 1)
+
+
+async def monthly(db: AsyncSession, household_id: uuid.UUID, year: int):
+    """Andamento mensile (gennaio→dicembre) dell'anno indicato: spese e bollette
+    per mese, così da leggere la stagionalità e i picchi di spesa del nucleo."""
+    months: dict[int, dict] = {
+        m: {"expenses_total": 0.0, "bills_total": 0.0, "count": 0} for m in range(1, 13)
+    }
+
+    emonth = func.extract("month", Expense.purchase_date)
+    estmt = (
+        select(emonth, func.coalesce(func.sum(Expense.line_amount), 0), func.count())
+        .where(
+            Expense.household_id == household_id,
+            Expense.fiscal_year == year,
+            Expense.purchase_date.is_not(None),
+        )
+        .group_by(emonth)
+    )
+    for m, t, n in (await db.execute(estmt)).all():
+        if m is None:
+            continue
+        row = months[int(m)]
+        row["expenses_total"] = float(t or 0)
+        row["count"] += int(n or 0)
+
+    # Le bollette non hanno purchase_date: usiamo la data di competenza più
+    # significativa disponibile (fine periodo → emissione → scadenza → inizio).
+    ref = func.coalesce(
+        Bill.period_end, Bill.issue_date, Bill.due_date, Bill.period_start
+    )
+    bmonth = func.extract("month", ref)
+    bstmt = (
+        select(bmonth, func.coalesce(func.sum(Bill.total_amount), 0), func.count())
+        .where(Bill.household_id == household_id, Bill.fiscal_year == year)
+        .group_by(bmonth)
+    )
+    for m, t, n in (await db.execute(bstmt)).all():
+        if m is None:
+            continue
+        row = months[int(m)]
+        row["bills_total"] = float(t or 0)
+        row["count"] += int(n or 0)
+
+    return [
+        {
+            "month": m,
+            "label": MONTH_LABELS[m],
+            "expenses_total": round(months[m]["expenses_total"], 2),
+            "bills_total": round(months[m]["bills_total"], 2),
+            "total": round(months[m]["expenses_total"] + months[m]["bills_total"], 2),
+            "count": months[m]["count"],
+        }
+        for m in range(1, 13)
+    ]
+
+
+async def top_merchants(
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    year: int | None = None,
+    limit: int = 10,
+    is_admin: bool = True,
+):
+    """Esercenti/fornitori su cui il nucleo spende di più (per importo totale).
+    Per i non-amministratori esclude le righe della categoria sensibile farmaci."""
+    stmt = (
+        select(
+            Expense.merchant,
+            func.sum(Expense.line_amount),
+            func.count(),
+            func.max(Expense.purchase_date),
+        )
+        .where(
+            Expense.household_id == household_id,
+            Expense.merchant.is_not(None),
+            Expense.merchant != "",
+        )
+        .group_by(Expense.merchant)
+        .order_by(func.sum(Expense.line_amount).desc())
+        .limit(limit)
+    )
+    if year:
+        stmt = stmt.where(Expense.fiscal_year == year)
+    if not is_admin:
+        stmt = stmt.where(
+            Expense.merch_category.notin_(_SENSITIVE)
+            | Expense.merch_category.is_(None)
+        )
+    res = await db.execute(stmt)
+    return [
+        {
+            "merchant": m,
+            "total": round(float(t or 0), 2),
+            "count": int(n or 0),
+            "last_purchase": d.isoformat() if d else None,
+        }
+        for m, t, n, d in res.all()
+    ]
+
+
+async def compare_years(
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    year: int,
+    is_admin: bool = True,
+):
+    """Confronto dell'anno indicato con il precedente: totali e variazione per
+    categoria, per cogliere subito rincari e voci in crescita/calo."""
+    prev = year - 1
+    cur_rows = await by_category(db, household_id, year)
+    prev_rows = await by_category(db, household_id, prev)
+    if not is_admin:
+        cur_rows = [r for r in cur_rows if r["category"] not in SENSITIVE_CATEGORIES]
+        prev_rows = [r for r in prev_rows if r["category"] not in SENSITIVE_CATEGORIES]
+
+    cur_map = {r["category"]: r["total"] for r in cur_rows}
+    prev_map = {r["category"]: r["total"] for r in prev_rows}
+    categories = set(cur_map) | set(prev_map)
+    by_cat = []
+    for cat in categories:
+        ct = cur_map.get(cat, 0.0)
+        pt = prev_map.get(cat, 0.0)
+        by_cat.append(
+            {
+                "category": cat,
+                "current": round(ct, 2),
+                "previous": round(pt, 2),
+                "delta": round(ct - pt, 2),
+                "delta_pct": _pct_change(ct, pt),
+            }
+        )
+    by_cat.sort(key=lambda r: r["current"], reverse=True)
+
+    cur_total = round(sum(cur_map.values()), 2)
+    prev_total = round(sum(prev_map.values()), 2)
+    return {
+        "year": year,
+        "previous_year": prev,
+        "current_total": cur_total,
+        "previous_total": prev_total,
+        "delta": round(cur_total - prev_total, 2),
+        "delta_pct": _pct_change(cur_total, prev_total),
+        "by_category": by_cat,
+    }
+
+
+def _compute_insights(
+    year: int,
+    overview_data: dict,
+    comparison: dict,
+    categories: list[dict],
+    fiscal: list[dict],
+    upcoming_bills: dict,
+) -> list[dict]:
+    """Costruisce gli "insight" (osservazioni automatiche) a partire dai dati
+    già aggregati. Funzione pura: nessun accesso al DB, così è testabile a parte.
+    Ogni insight ha `severity` (positive/info/warning), un'icona, un titolo e un
+    dettaglio leggibile."""
+    out: list[dict] = []
+
+    # 1) Variazione complessiva rispetto all'anno precedente.
+    dpct = comparison.get("delta_pct")
+    if dpct is not None and comparison.get("previous_total"):
+        if dpct > 5:
+            out.append({
+                "severity": "warning",
+                "icon": "📈",
+                "title": f"Spesa in aumento del {dpct:.1f}% sul {comparison['previous_year']}",
+                "detail": f"Nel {year} hai speso {comparison['current_total']:.2f} € contro {comparison['previous_total']:.2f} € dell'anno prima.",
+            })
+        elif dpct < -5:
+            out.append({
+                "severity": "positive",
+                "icon": "📉",
+                "title": f"Spesa in calo del {abs(dpct):.1f}% sul {comparison['previous_year']}",
+                "detail": f"Nel {year} hai speso {comparison['current_total']:.2f} € contro {comparison['previous_total']:.2f} € dell'anno prima.",
+            })
+        else:
+            out.append({
+                "severity": "info",
+                "icon": "➖",
+                "title": "Spesa stabile rispetto all'anno precedente",
+                "detail": f"Variazione del {dpct:.1f}% sul {comparison['previous_year']}.",
+            })
+
+    # 2) Categoria con il maggior aumento in valore assoluto.
+    growers = [
+        c for c in comparison.get("by_category", [])
+        if c["delta"] > 0 and c["previous"] > 0
+    ]
+    if growers:
+        top = max(growers, key=lambda c: c["delta"])
+        pct = f" (+{top['delta_pct']:.1f}%)" if top.get("delta_pct") is not None else ""
+        out.append({
+            "severity": "warning",
+            "icon": "🔺",
+            "title": f"«{top['category']}» è la voce cresciuta di più",
+            "detail": f"+{top['delta']:.2f} €{pct} rispetto al {comparison['previous_year']}.",
+        })
+
+    # 3) Categoria di spesa principale dell'anno.
+    spendable = [c for c in categories if c.get("total", 0) > 0]
+    if spendable:
+        top_cat = max(spendable, key=lambda c: c["total"])
+        total_all = sum(c["total"] for c in spendable) or 1
+        share = top_cat["total"] / total_all * 100
+        out.append({
+            "severity": "info",
+            "icon": "🏆",
+            "title": f"Voce principale: «{top_cat['category']}»",
+            "detail": f"{top_cat['total']:.2f} € ({share:.0f}% del totale, {top_cat['count']} moviment{'o' if top_cat['count'] == 1 else 'i'}).",
+        })
+
+    # 4) Potenziale fiscale (detraibile/deducibile) + voci da verificare.
+    ded = overview_data.get("deductible_total", 0)
+    if ded:
+        out.append({
+            "severity": "positive",
+            "icon": "🏷️",
+            "title": f"{ded:.2f} € potenzialmente agevolabili",
+            "detail": "Spese classificate come detraibili o deducibili: verifica col commercialista.",
+        })
+    to_verify = next(
+        (f["total"] for f in fiscal if f["classification"] == "da_verificare"), 0
+    )
+    if to_verify:
+        out.append({
+            "severity": "warning",
+            "icon": "❓",
+            "title": f"{to_verify:.2f} € con classificazione da verificare",
+            "detail": "Alcune spese non hanno una classificazione fiscale certa: rivedile per non perdere agevolazioni.",
+        })
+
+    # 5) Documenti da rivedere.
+    to_review = overview_data.get("to_review", 0)
+    if to_review:
+        out.append({
+            "severity": "warning",
+            "icon": "🔎",
+            "title": f"{to_review} document{'o' if to_review == 1 else 'i'} da rivedere",
+            "detail": "Controlla attribuzione e classificazione prima di usarli col commercialista.",
+        })
+
+    # 6) Bollette scadute / in arrivo.
+    overdue = upcoming_bills.get("overdue", [])
+    if overdue:
+        tot = sum(b.get("total_amount", 0) for b in overdue)
+        out.append({
+            "severity": "warning",
+            "icon": "⏰",
+            "title": f"{len(overdue)} bollett{'a' if len(overdue) == 1 else 'e'} scadut{'a' if len(overdue) == 1 else 'e'}",
+            "detail": f"Totale non saldato in ritardo: {tot:.2f} €.",
+        })
+    elif upcoming_bills.get("open_count"):
+        out.append({
+            "severity": "info",
+            "icon": "📅",
+            "title": f"{upcoming_bills['open_count']} bollett{'a' if upcoming_bills['open_count'] == 1 else 'e'} da pagare",
+            "detail": f"Totale aperto: {upcoming_bills.get('open_total', 0):.2f} €.",
+        })
+
+    if not out:
+        out.append({
+            "severity": "info",
+            "icon": "📭",
+            "title": "Ancora pochi dati per l'analisi",
+            "detail": "Carica qualche documento o registra delle spese per vedere qui le osservazioni automatiche.",
+        })
+    return out
+
+
+async def insights(
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    year: int,
+    is_admin: bool = True,
+):
+    """Osservazioni automatiche sulla situazione di spesa del nucleo per l'anno
+    indicato (variazioni, voci principali, potenziale fiscale, scadenze)."""
+    overview_data = await overview(db, household_id, year)
+    comparison = await compare_years(db, household_id, year, is_admin)
+    categories = await by_category(db, household_id, year)
+    if not is_admin:
+        categories = [c for c in categories if c["category"] not in SENSITIVE_CATEGORIES]
+    fiscal = await fiscal_summary(db, household_id, year)
+    upcoming_bills = await bills_service.upcoming(db, household_id)
+    return _compute_insights(
+        year, overview_data, comparison, categories, fiscal, upcoming_bills
+    )

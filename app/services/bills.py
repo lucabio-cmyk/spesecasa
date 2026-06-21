@@ -11,14 +11,13 @@ from app.models.bill import Bill
 _OPEN_STATUSES = ("da_pagare", "scaduta", "rateizzata")
 
 
-async def cost_analysis(
+async def _cost_agg(
     db: AsyncSession,
     household_id: uuid.UUID,
-    year: int | None = None,
-    unit_id: uuid.UUID | None = None,
-) -> list[dict]:
-    """Valutazione costi per tipo di utenza: totale, n. bollette, importo medio,
-    consumo totale e costo unitario medio (€/unità) quando il consumo è noto."""
+    year: int | None,
+    unit_id: uuid.UUID | None,
+) -> dict[str, dict]:
+    """Aggregati di costo/consumo per tipo di utenza (chiave = utility_type)."""
     stmt = (
         select(
             Bill.utility_type,
@@ -30,30 +29,98 @@ async def cost_analysis(
         )
         .where(Bill.household_id == household_id)
         .group_by(Bill.utility_type)
-        .order_by(func.sum(Bill.total_amount).desc())
     )
     if year:
         stmt = stmt.where(Bill.fiscal_year == year)
     if unit_id:
         stmt = stmt.where(Bill.property_unit_id == unit_id)
     res = await db.execute(stmt)
-    out = []
+    agg: dict[str, dict] = {}
     for utype, total, count, avg, consumption, unit in res.all():
         total_f = float(total or 0)
         cons_f = float(consumption or 0)
-        out.append(
-            {
-                "utility_type": str(utype),
-                "total": total_f,
-                "count": int(count or 0),
-                "avg_amount": float(avg or 0),
-                "consumption": cons_f,
-                "consumption_unit": unit or "",
-                # Costo unitario medio sul periodo (solo se c'è consumo misurato).
-                "unit_cost": round(total_f / cons_f, 4) if cons_f else None,
-            }
-        )
+        agg[str(utype)] = {
+            "total": total_f,
+            "count": int(count or 0),
+            "avg_amount": float(avg or 0),
+            "consumption": cons_f,
+            "consumption_unit": unit or "",
+            "unit_cost": round(total_f / cons_f, 4) if cons_f else None,
+        }
+    return agg
+
+
+def _pct_change(current: float, previous: float) -> float | None:
+    if not previous:
+        return None
+    return round((current - previous) / previous * 100, 1)
+
+
+async def cost_analysis(
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    year: int | None = None,
+    unit_id: uuid.UUID | None = None,
+) -> list[dict]:
+    """Valutazione costi per tipo di utenza: totale, n. bollette, importo medio,
+    consumo totale e costo unitario medio (€/unità) quando il consumo è noto.
+    Se è indicato un anno, aggiunge il confronto con l'anno precedente (spesa,
+    consumo e costo unitario) per evidenziare rincari e consumi anomali."""
+    current = await _cost_agg(db, household_id, year, unit_id)
+    prev = await _cost_agg(db, household_id, year - 1, unit_id) if year else {}
+
+    out = []
+    for utype, cur in current.items():
+        row = {"utility_type": utype, **cur}
+        if year:
+            p = prev.get(utype)
+            row["prev_total"] = round(p["total"], 2) if p else 0.0
+            row["total_delta_pct"] = _pct_change(cur["total"], p["total"]) if p else None
+            row["prev_unit_cost"] = p["unit_cost"] if p else None
+            row["unit_cost_delta_pct"] = (
+                _pct_change(cur["unit_cost"], p["unit_cost"])
+                if p and p.get("unit_cost") and cur.get("unit_cost")
+                else None
+            )
+            row["prev_consumption"] = round(p["consumption"], 3) if p else 0.0
+            row["consumption_delta_pct"] = (
+                _pct_change(cur["consumption"], p["consumption"])
+                if p and p["consumption"]
+                else None
+            )
+        out.append(row)
+    out.sort(key=lambda r: r["total"], reverse=True)
     return out
+
+
+async def monthly(
+    db: AsyncSession,
+    household_id: uuid.UUID,
+    year: int,
+    unit_id: uuid.UUID | None = None,
+) -> list[dict]:
+    """Andamento mensile delle bollette dell'anno indicato (gen→dic): totale e
+    numero per mese, utile a leggere la stagionalità di luce/gas/riscaldamento."""
+    ref = func.coalesce(
+        Bill.period_end, Bill.issue_date, Bill.due_date, Bill.period_start
+    )
+    bmonth = func.extract("month", ref)
+    stmt = (
+        select(bmonth, func.coalesce(func.sum(Bill.total_amount), 0), func.count(Bill.id))
+        .where(Bill.household_id == household_id, Bill.fiscal_year == year)
+        .group_by(bmonth)
+    )
+    if unit_id:
+        stmt = stmt.where(Bill.property_unit_id == unit_id)
+    totals = {m: [0.0, 0] for m in range(1, 13)}
+    for m, total, count in (await db.execute(stmt)).all():
+        if m is None:
+            continue
+        totals[int(m)] = [float(total or 0), int(count or 0)]
+    return [
+        {"month": m, "total": round(totals[m][0], 2), "count": totals[m][1]}
+        for m in range(1, 13)
+    ]
 
 
 async def trend(
