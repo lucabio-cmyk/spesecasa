@@ -8,6 +8,77 @@ def test_import_app():
     assert app is not None
 
 
+def test_member_update_route_registered():
+    """L'endpoint di modifica membro post-creazione deve essere esposto (PATCH)."""
+    from app.api import household
+
+    patch_member = any(
+        getattr(r, "path", "") == "/household/members/{member_id}"
+        and "PATCH" in getattr(r, "methods", set())
+        for r in household.router.routes
+    )
+    assert patch_member, "PATCH /household/members/{member_id} non registrato"
+
+
+def test_member_update_schema_allows_partial():
+    """MemberUpdate consente l'aggiunta del solo codice fiscale dopo la creazione."""
+    from app.schemas.auth import MemberUpdate
+
+    body = MemberUpdate(codice_fiscale="RSSMRA80A01H501U")
+    data = body.model_dump(exclude_unset=True)
+    assert data == {"codice_fiscale": "RSSMRA80A01H501U"}
+
+
+def test_password_reset_route_registered():
+    """L'endpoint di recupero password self-service deve essere esposto (POST)."""
+    from app.api import auth
+
+    has_reset = any(
+        getattr(r, "path", "") == "/auth/password-reset"
+        and "POST" in getattr(r, "methods", set())
+        for r in auth.router.routes
+    )
+    assert has_reset, "POST /auth/password-reset non registrato"
+
+
+def test_password_reset_schema_requires_min_password():
+    """La nuova password del recupero richiede almeno 8 caratteri."""
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.auth import PasswordResetRequest
+
+    PasswordResetRequest(
+        email="a@b.it", codice_fiscale="RSSMRA80A01H501U", new_password="abcd1234"
+    )
+    with pytest.raises(ValidationError):
+        PasswordResetRequest(
+            email="a@b.it", codice_fiscale="RSSMRA80A01H501U", new_password="short"
+        )
+
+
+def test_password_reset_schema_accepts_recovery_key():
+    """Il recupero accetta in alternativa il codice di recupero del deploy."""
+    body = __import__(
+        "app.schemas.auth", fromlist=["PasswordResetRequest"]
+    ).PasswordResetRequest(
+        email="a@b.it", recovery_key="super-secret", new_password="abcd1234"
+    )
+    assert body.recovery_key == "super-secret"
+    assert body.codice_fiscale is None
+
+
+def test_password_reset_schema_requires_a_factor():
+    """Senza codice fiscale né codice di recupero la richiesta è invalida."""
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.auth import PasswordResetRequest
+
+    with pytest.raises(ValidationError):
+        PasswordResetRequest(email="a@b.it", new_password="abcd1234")
+
+
 def test_async_db_url_coercion():
     from app.config import Settings
 

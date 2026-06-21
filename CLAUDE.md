@@ -105,10 +105,17 @@ soggetto e archivia.
 
 ## Superficie API (`app/api`)
 - `auth`: `/auth/register` (nuovo nucleo+admin), `/auth/join`, `/auth/login`,
-  `/auth/me`.
+  `/auth/me`, `POST /auth/password-reset` (recupero password self-service via GUI
+  senza email: verifica l'identità con email + **codice fiscale** dell'utente
+  **oppure** il **codice di recupero** del deploy `ADMIN_RECOVERY_KEY` — utile se
+  l'admin è chiuso fuori e non ha CF; confronto a tempo costante, errore generico
+  per non rivelare email/CF esistenti. In alternativa l'admin reimposta la
+  password dalla modifica membro, o si usa lo script `scripts/reset_password.py`).
 - `household`: `GET /household` (info + addestramento), `PATCH /household`
   (nome + `agent_instructions`, admin), `GET/POST /household/members`,
-  `DELETE /household/members/{id}`, `GET/POST /household/units`,
+  `PATCH /household/members/{id}` (modifica dati membro post-creazione, es.
+  codice fiscale: admin su tutti, ciascun membro su se stesso; il ruolo solo
+  admin), `DELETE /household/members/{id}`, `GET/POST /household/units`,
   `PATCH/DELETE /household/units/{id}` (unità immobiliari, gestione admin).
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
