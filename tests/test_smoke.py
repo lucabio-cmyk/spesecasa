@@ -29,6 +29,56 @@ def test_member_update_schema_allows_partial():
     assert data == {"codice_fiscale": "RSSMRA80A01H501U"}
 
 
+def test_member_invite_allows_no_access():
+    """Si può creare un familiare senza accesso: niente email né password."""
+    from app.schemas.auth import MemberInvite
+
+    body = MemberInvite(full_name="Nonna Pina")
+    assert body.email is None
+    assert body.password is None
+
+
+def test_member_invite_with_access():
+    """Con email e password insieme il familiare ha un accesso."""
+    from app.schemas.auth import MemberInvite
+
+    body = MemberInvite(
+        full_name="Mario Rossi", email="m@r.it", password="abcd1234"
+    )
+    assert body.email == "m@r.it"
+    assert body.password == "abcd1234"
+
+
+def test_member_invite_email_without_password_invalid():
+    """Email senza password (o viceversa) non è un accesso valido."""
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.auth import MemberInvite
+
+    with pytest.raises(ValidationError):
+        MemberInvite(full_name="Tizio", email="t@x.it")
+    with pytest.raises(ValidationError):
+        MemberInvite(full_name="Tizio", password="abcd1234")
+
+
+def test_user_out_has_access_flag():
+    """UserOut espone has_access derivato dalla presenza della password."""
+    from app.schemas.auth import UserOut
+
+    no_access = UserOut.model_validate(
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "email": None,
+            "full_name": "Nonna Pina",
+            "role": "member",
+            "household_id": "22222222-2222-2222-2222-222222222222",
+        }
+    )
+    assert no_access.has_access is False
+    assert no_access.email is None
+
+
 def test_password_reset_route_registered():
     """L'endpoint di recupero password self-service deve essere esposto (POST)."""
     from app.api import auth

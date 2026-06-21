@@ -1212,8 +1212,8 @@ async function viewSettings() {
           <div class="row between" style="margin-bottom:14px"><h3>Membri</h3>${isAdmin ? `<button class="btn btn-primary btn-sm" id="add-member">+ Aggiungi</button>` : ""}</div>
           <div class="table-wrap"><table class="data"><thead><tr><th>Nome</th><th>Ruolo</th><th>Cod. fiscale</th><th></th></tr></thead>
           <tbody>${members.map(m => `<tr>
-            <td><div class="row" style="gap:9px"><span class="avatar" style="width:28px;height:28px;font-size:11px">${initials(m.full_name)}</span><div><b>${esc(m.full_name)}</b><div class="hint">${esc(m.email)}</div></div></div></td>
-            <td>${m.role === "admin" ? `<span class="badge b-familiare">Admin</span>` : `<span class="badge b-non_rilevante">Membro</span>`}</td>
+            <td><div class="row" style="gap:9px"><span class="avatar" style="width:28px;height:28px;font-size:11px">${initials(m.full_name)}</span><div><b>${esc(m.full_name)}</b><div class="hint">${m.email ? esc(m.email) : "senza accesso"}</div></div></div></td>
+            <td>${m.role === "admin" ? `<span class="badge b-familiare">Admin</span>` : (m.email ? `<span class="badge b-non_rilevante">Membro</span>` : `<span class="badge b-non_rilevante">Soggetto</span>`)}</td>
             <td class="mono">${esc(m.codice_fiscale || "—")}</td>
             <td class="num row" style="gap:4px;justify-content:flex-end">${(isAdmin || m.id === State.user.id) ? `<button class="btn-icon" data-edit-member="${m.id}" title="Modifica">✏️</button>` : ""}${isAdmin && m.id !== State.user.id ? `<button class="btn-icon" data-rm="${m.id}" title="Rimuovi">🗑️</button>` : ""}${m.id === State.user.id ? `<span class="hint">tu</span>` : ""}</td>
           </tr>`).join("")}</tbody></table></div>
@@ -1367,16 +1367,34 @@ function addMemberDialog() {
     <div class="modal-head"><h3>Aggiungi un membro</h3><button class="btn-icon" data-close>✕</button></div>
     <form id="member-form">
       <div class="field"><label>Nome completo</label><input class="input" name="full_name" required></div>
-      <div class="field"><label>Email</label><input class="input" type="email" name="email" required></div>
       <div class="field"><label>Codice fiscale <span class="hint">(opzionale)</span></label><input class="input" name="codice_fiscale" maxlength="16" style="text-transform:uppercase"></div>
-      <div class="field"><label>Password provvisoria <span class="hint">(min 8)</span></label><input class="input" type="password" name="password" minlength="8" required></div>
-      <p class="hint" style="margin-bottom:16px">Comunica email e password al familiare: potrà accedere e cambiare i dati.</p>
-      <button class="btn btn-primary btn-block" type="submit">Crea accesso</button>
+      <label class="row" style="gap:8px;margin-bottom:14px;cursor:pointer"><input type="checkbox" id="member-has-access" checked> <span>Crea anche un accesso all'app (login)</span></label>
+      <div id="member-access-fields">
+        <div class="field"><label>Email</label><input class="input" type="email" name="email"></div>
+        <div class="field"><label>Password provvisoria <span class="hint">(min 8)</span></label><input class="input" type="password" name="password" minlength="8"></div>
+        <p class="hint" style="margin-bottom:16px">Comunica email e password al familiare: potrà accedere e cambiare i dati.</p>
+      </div>
+      <p class="hint" id="member-noaccess-hint" style="margin-bottom:16px;display:none">Il familiare sarà un semplice soggetto: potrai attribuirgli spese, documenti e bollette, ma non potrà accedere all'app. Potrai dargli l'accesso in seguito.</p>
+      <button class="btn btn-primary btn-block" type="submit">Aggiungi membro</button>
     </form>`);
   $("#modal-root [data-close]").addEventListener("click", closeModal);
+  const accessFields = $("#member-access-fields");
+  const noAccessHint = $("#member-noaccess-hint");
+  const emailEl = accessFields.querySelector("[name=email]");
+  const pwEl = accessFields.querySelector("[name=password]");
+  const toggle = $("#member-has-access");
+  const syncAccess = () => {
+    const on = toggle.checked;
+    accessFields.style.display = on ? "" : "none";
+    noAccessHint.style.display = on ? "none" : "";
+    emailEl.required = on; pwEl.required = on;
+  };
+  toggle.addEventListener("change", syncAccess); syncAccess();
   $("#member-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
+    if (!toggle.checked) { delete data.email; delete data.password; }
+    if (!data.codice_fiscale) delete data.codice_fiscale;
     try { await api("/household/members", { method: "POST", body: data }); toast("Membro aggiunto", { type: "ok" }); closeModal(); viewSettings(); }
     catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
   });
@@ -1385,14 +1403,16 @@ function addMemberDialog() {
 function editMemberDialog(member, isAdmin) {
   if (!member) return;
   const isSelf = member.id === State.user.id;
+  const hasAccess = !!member.email;
   openModal(`
     <div class="modal-head"><h3>Modifica membro</h3><button class="btn-icon" data-close>✕</button></div>
     <form id="member-edit-form">
       <div class="field"><label>Nome completo</label><input class="input" name="full_name" value="${esc(member.full_name || "")}" required></div>
-      <div class="field"><label>Email</label><input class="input" type="email" name="email" value="${esc(member.email || "")}" required></div>
+      <div class="field"><label>Email ${hasAccess ? "" : `<span class="hint">(lascia vuoto per un soggetto senza accesso)</span>`}</label><input class="input" type="email" name="email" value="${esc(member.email || "")}" ${hasAccess ? "required" : ""}></div>
       <div class="field"><label>Codice fiscale <span class="hint">(opzionale)</span></label><input class="input" name="codice_fiscale" maxlength="16" style="text-transform:uppercase" value="${esc(member.codice_fiscale || "")}"></div>
       ${isAdmin ? `<div class="field"><label>Ruolo</label><select class="select" name="role">${optList({ member: "Membro", admin: "Admin" }, member.role)}</select></div>` : ""}
-      <div class="field"><label>Nuova password <span class="hint">(lascia vuoto per non cambiarla, min 8)</span></label><input class="input" type="password" name="password" minlength="8" autocomplete="new-password"></div>
+      <div class="field"><label>${hasAccess ? "Nuova password" : "Password"} <span class="hint">${hasAccess ? "(lascia vuoto per non cambiarla, min 8)" : "(impostala per dare l'accesso, min 8)"}</span></label><input class="input" type="password" name="password" minlength="8" autocomplete="new-password"></div>
+      ${hasAccess ? "" : `<p class="hint" style="margin-bottom:14px">Questo familiare non ha accesso all'app. Inserisci email e password per dargli un accesso (login).</p>`}
       <button class="btn btn-primary btn-block" type="submit">Salva modifiche</button>
     </form>`);
   $("#modal-root [data-close]").addEventListener("click", closeModal);
@@ -1400,6 +1420,14 @@ function editMemberDialog(member, isAdmin) {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
     if (!data.password) delete data.password;
+    if (!data.email) delete data.email;
+    // Per dare l'accesso a un soggetto servono email e password insieme.
+    if (data.email && !hasAccess && !data.password) {
+      toast("Per dare l'accesso serve anche una password", { type: "err" }); return;
+    }
+    if (data.password && !hasAccess && !data.email) {
+      toast("Per dare l'accesso serve anche un'email", { type: "err" }); return;
+    }
     data.codice_fiscale = (data.codice_fiscale || "").trim().toUpperCase() || null;
     try {
       await api(`/household/members/${member.id}`, { method: "PATCH", body: data });

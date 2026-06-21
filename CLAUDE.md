@@ -98,6 +98,14 @@ soggetto e archivia.
   il codice. Configurabili dalla GUI (Impostazioni → Addestramento assistente).
 - **Multi-utente**: ogni utente appartiene a un `Household`; tutti i dati sono
   scoping per `household_id`. Auth JWT (`app/deps.py`, `app/services/security.py`).
+  **Familiari senza accesso**: un membro può esistere come semplice *soggetto*
+  (per attribuire spese/documenti/bollette come pagante o beneficiario) **senza
+  accesso all'app**: `User.email`/`User.hashed_password` sono nullable e l'admin
+  crea il familiare senza credenziali (`POST /household/members` con solo
+  `full_name`). Email e password vanno fornite insieme per dare l'accesso (login);
+  `UserOut.has_access` indica se il membro può accedere. L'accesso può essere
+  aggiunto in seguito da `PATCH /household/members/{id}`. Il login rifiuta gli
+  utenti senza password.
 - **Storage** (`app/services/storage.py`): `LocalStorage` su volume; S3 da fare.
 - **Ricerca semantica** (`app/services/embeddings.py`, `app/services/search.py`):
   l'embedding del documento (header + sintesi + voci) è calcolato a fine pipeline

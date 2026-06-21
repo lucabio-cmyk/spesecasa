@@ -75,17 +75,21 @@ async def list_members(user: CurrentUser, db: DB):
 
 @router.post("/members", response_model=UserOut, status_code=201)
 async def add_member(body: MemberInvite, user: CurrentUser, db: DB):
-    """Aggiunge un membro al nucleo (solo admin). Utile finché non c'è il flusso
-    a inviti: l'admin crea l'accesso e comunica la password al familiare."""
+    """Aggiunge un membro al nucleo (solo admin).
+
+    Se sono indicati email e password viene creato un accesso (login) e l'admin
+    comunica la password al familiare; altrimenti il familiare è un semplice
+    **soggetto senza accesso**, usato solo per attribuire spese e documenti."""
     if user.role != UserRole.ADMIN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo l'amministratore del nucleo può aggiungere membri")
-    exists = await db.execute(select(User).where(User.email == body.email))
-    if exists.scalars().first():
-        raise HTTPException(status.HTTP_409_CONFLICT, "Email già registrata")
+    if body.email:
+        exists = await db.execute(select(User).where(User.email == body.email))
+        if exists.scalars().first():
+            raise HTTPException(status.HTTP_409_CONFLICT, "Email già registrata")
     member = User(
         household_id=user.household_id,
         email=body.email,
-        hashed_password=hash_password(body.password),
+        hashed_password=hash_password(body.password) if body.password else None,
         full_name=body.full_name,
         codice_fiscale=body.codice_fiscale,
         role=UserRole.MEMBER,
