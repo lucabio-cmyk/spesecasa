@@ -96,6 +96,9 @@ async def upload_document(
     doc = Document(
         household_id=user.household_id,
         uploaded_by_user_id=user.id,
+        # Chi carica il documento è il pagante di default: l'agente lo conferma o
+        # lo corregge solo se dal documento emerge un altro soggetto pagante.
+        payer_user_id=user.id,
         original_filename=file.filename or "documento",
         mime_type=mime_type,
         storage_path=path,

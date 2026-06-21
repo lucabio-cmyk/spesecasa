@@ -96,6 +96,27 @@ soggetto e archivia.
   vengono iniettate nel system prompt a ogni run, così l'agente impara le
   convenzioni del nucleo (es. nome/alias dell'unità di condominio) senza toccare
   il codice. Configurabili dalla GUI (Impostazioni → Addestramento assistente).
+- **Pagante di default = utente loggato + Metodi di pagamento per utente**
+  (`app/models/payment_method.py:PaymentMethod`, `enums.PaymentMethodType`,
+  `app/schemas/payment_method.py`, tool `list_payment_methods`,
+  `resolvers.resolve_payment_method_id`): salvo evidenze contrarie il **pagante è
+  l'utente che opera**. In upload il documento nasce con `payer_user_id` =
+  utente che carica (`app/api/documents.py`); l'agente lo conferma/corregge solo
+  se dal documento emerge un altro soggetto (`save_document` usa `resolve_member_id
+  or payer esistente`). Le spese da chat (`record_expense`) e le bollette
+  (`save_bill`/`record_bill`) ricadono sull'utente corrente; anche le POST REST
+  `/expenses` e `/bills` impostano il pagante mancante sull'utente. Inoltre ogni
+  membro può avere **metodi di pagamento** (carta credito/debito, bancomat,
+  prepagata, contanti, bonifico, addebito diretto/RID, PayPal, ...) intestati a sé
+  (`PaymentMethod.user_id`, `label`, `method_type`, `provider`, `last4` — mai il
+  PAN completo —, `is_default`, `active`, `details`). `Document`/`Expense`/`Bill`
+  hanno `payment_method_id` (FK SET NULL) per collegare la spesa allo strumento
+  (e quindi all'intestatario). L'agente legge i metodi con `list_payment_methods`
+  e, quando dallo scontrino/estratto riconosce tipo e ultime 4 cifre, passa
+  `payment_method_id` ai tool di salvataggio (resolver con preferenza al pagante).
+  API `GET/POST /household/payment-methods` + `PATCH/DELETE
+  /household/payment-methods/{id}` (admin gestisce tutti, ogni membro i propri);
+  GUI in Impostazioni → Metodi di pagamento e selettore nel form bolletta.
 - **Multi-utente**: ogni utente appartiene a un `Household`; tutti i dati sono
   scoping per `household_id`. Auth JWT (`app/deps.py`, `app/services/security.py`).
   **Familiari senza accesso**: un membro può esistere come semplice *soggetto*
@@ -165,6 +186,10 @@ soggetto e archivia.
 - `ExpenseCategory`(household_id, name (normalizzato, unico per nucleo),
   description, examples (JSONB), source `agent`/`user`, active). Categorie
   merceologiche PERSONALIZZATE del nucleo, oltre a quelle di base.
+- `PaymentMethod`(household_id, user_id (intestatario), label, method_type
+  (`PaymentMethodType`), provider, last4, is_default, active, notes,
+  details (JSONB)). Strumenti di pagamento dei membri (carte, bancomat, ...).
+  `Document`/`Expense`/`Bill` hanno `payment_method_id` (FK SET NULL).
 - `ReviewItem`(household_id, kind, severity, status, title, detail, signature,
   target_type/target_id, fiscal_year, payload (JSONB: azione applicabile su
   consenso), source, resolved_at/by, resolution_note). Avvisi e proposte
@@ -190,7 +215,10 @@ soggetto e archivia.
   admin), `DELETE /household/members/{id}`, `GET/POST /household/units`,
   `PATCH/DELETE /household/units/{id}` (unità immobiliari, gestione admin),
   `GET/POST /household/categories` + `PATCH/DELETE /household/categories/{id}`
-  (categorie merceologiche note: di base + personalizzate del nucleo).
+  (categorie merceologiche note: di base + personalizzate del nucleo),
+  `GET/POST /household/payment-methods` (filtro `user_id`) + `PATCH/DELETE
+  /household/payment-methods/{id}` (metodi di pagamento dei membri: admin su
+  tutti, ciascun membro sui propri).
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
   `GET /documents/{id}`, `GET /documents/{id}/file`,

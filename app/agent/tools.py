@@ -28,10 +28,12 @@ from app.services.spreadsheets import is_spreadsheet, spreadsheet_to_text
 from app.services.resolvers import (
     find_existing_document,
     resolve_member_id,
+    resolve_payment_method_id,
     resolve_unit_id,
     to_date,
     to_decimal,
 )
+from app.models.payment_method import PaymentMethod
 from app.services.storage import get_storage
 
 
@@ -117,6 +119,20 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "list_payment_methods",
+        "description": (
+            "Elenca i METODI DI PAGAMENTO censiti dal nucleo (carte di credito/debito, "
+            "bancomat, prepagate, contanti, bonifico, addebito diretto/RID, PayPal, ...). "
+            "Per ognuno: id, etichetta, tipo, circuito/emittente, ultime 4 cifre, "
+            "intestatario (id e nome) e se è il predefinito di quel membro. USALO per "
+            "collegare una spesa/bolletta/documento allo strumento con cui è stata pagata: "
+            "dallo scontrino/estratto conto spesso si leggono il tipo (carta/contante) e le "
+            "ultime 4 cifre — confrontale con questo elenco e passa il payment_method_id a "
+            "save_document/add_expenses/record_expense/save_bill/record_bill."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "find_existing_document",
         "description": "Verifica se un documento esiste gia (anti-duplicazione), per hash del file o per data+emittente+importo.",
         "input_schema": {
@@ -194,6 +210,7 @@ TOOLS = [
                 "vat_amount": {"type": "number", "description": "importo IVA"},
                 "currency": {"type": "string", "description": "valuta ISO, es. EUR (default EUR)"},
                 "payment_method": {"type": "string"},
+                "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento del nucleo usato, da list_payment_methods"},
                 "payment_traceability": {"type": "string", "description": "nota su tracciabilità del pagamento (carta/bonifico vs contanti): incide sulla detraibilità"},
                 "document_number": {"type": "string"},
                 "due_date": {"type": "string", "description": "scadenza di pagamento AAAA-MM-GG (fatture/F24/avvisi)"},
@@ -264,6 +281,7 @@ TOOLS = [
                 "scope": {"type": "string", "enum": _SCOPE},
                 "payer": {"type": "string", "description": "nome o id del soggetto pagante"},
                 "beneficiary": {"type": "string", "description": "nome o id del beneficiario"},
+                "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento usato, da list_payment_methods"},
                 "fiscal_year": {"type": "integer"},
                 "details": {"type": "object", "description": _DETAILS_HINT},
                 "reliability_note": {"type": "string"},
@@ -301,6 +319,7 @@ TOOLS = [
                 "consumption_unit": {"type": "string", "description": "kWh, Smc, m³, ..."},
                 "status": {"type": "string", "enum": _BILL_STATUS},
                 "payment_method": {"type": "string", "description": "domiciliazione/RID, bonifico, ..."},
+                "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento del nucleo usato, da list_payment_methods"},
                 "payer": {"type": "string", "description": "intestatario/soggetto che paga"},
                 "property_unit": {"type": "string", "description": "unità immobiliare a cui si riferisce (nome, alias o id da list_property_units): essenziale per il condominio quando il nucleo ha più unità"},
                 "fiscal_year": {"type": "integer"},
@@ -337,6 +356,7 @@ TOOLS = [
                 "consumption_unit": {"type": "string"},
                 "status": {"type": "string", "enum": _BILL_STATUS},
                 "payment_method": {"type": "string"},
+                "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento usato, da list_payment_methods"},
                 "payer": {"type": "string"},
                 "property_unit": {"type": "string", "description": "unità immobiliare a cui si riferisce (nome, alias o id)"},
                 "fiscal_year": {"type": "integer"},
@@ -524,6 +544,32 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 ]
             }
 
+        if name == "list_payment_methods":
+            res = await db.execute(
+                select(PaymentMethod, User.full_name)
+                .join(User, PaymentMethod.user_id == User.id)
+                .where(
+                    PaymentMethod.household_id == ctx.household_id,
+                    PaymentMethod.active.is_(True),
+                )
+                .order_by(PaymentMethod.is_default.desc(), PaymentMethod.label)
+            )
+            return {
+                "payment_methods": [
+                    {
+                        "id": str(pm.id),
+                        "label": pm.label,
+                        "method_type": str(pm.method_type),
+                        "provider": pm.provider,
+                        "last4": pm.last4,
+                        "user_id": str(pm.user_id),
+                        "owner_name": owner_name,
+                        "is_default": pm.is_default,
+                    }
+                    for pm, owner_name in res.all()
+                ]
+            }
+
         if name == "find_existing_document":
             found = await find_existing_document(
                 db,
@@ -632,6 +678,13 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 await resolve_member_id(db, ctx.household_id, tool_input.get("beneficiary"))
                 or doc.beneficiary_user_id
             )
+            pm_ref = tool_input.get("payment_method_id") or tool_input.get("payment_method")
+            doc.payment_method_id = (
+                await resolve_payment_method_id(
+                    db, ctx.household_id, pm_ref, doc.payer_user_id
+                )
+                or doc.payment_method_id
+            )
             await db.commit()
             return {"ok": True, "document_id": str(doc.id), "fiscal_year": doc.fiscal_year}
 
@@ -667,11 +720,17 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                     fyear = doc.fiscal_year
                 payer = await resolve_member_id(db, ctx.household_id, line.get("payer"))
                 beneficiary = await resolve_member_id(db, ctx.household_id, line.get("beneficiary"))
+                line_payer = payer or (doc.payer_user_id if doc else None)
+                # Metodo di pagamento: override di riga, altrimenti quello del documento.
+                pm_id = await resolve_payment_method_id(
+                    db, ctx.household_id, line.get("payment_method_id"), line_payer
+                ) or (doc.payment_method_id if doc else None)
                 expense = Expense(
                     household_id=ctx.household_id,
                     document_id=ctx.document_id,
-                    payer_user_id=payer or (doc.payer_user_id if doc else None),
+                    payer_user_id=line_payer,
                     beneficiary_user_id=beneficiary or (doc.beneficiary_user_id if doc else None),
+                    payment_method_id=pm_id,
                     purchase_date=pdate,
                     merchant=line.get("merchant") or (doc.issuer if doc else None),
                     description_original=line.get("description_original"),
@@ -732,11 +791,16 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 fyear = pdate.year
             payer = await resolve_member_id(db, ctx.household_id, tool_input.get("payer"))
             beneficiary = await resolve_member_id(db, ctx.household_id, tool_input.get("beneficiary"))
+            payer_id = payer or ctx.user_id
+            pm_id = await resolve_payment_method_id(
+                db, ctx.household_id, tool_input.get("payment_method_id"), payer_id
+            )
             expense = Expense(
                 household_id=ctx.household_id,
                 document_id=None,  # spesa manuale, senza documento allegato
-                payer_user_id=payer or ctx.user_id,
+                payer_user_id=payer_id,
                 beneficiary_user_id=beneficiary,
+                payment_method_id=pm_id,
                 purchase_date=pdate,
                 merchant=tool_input.get("merchant"),
                 description_original=tool_input.get("description_original"),
@@ -880,7 +944,12 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             status_raw = tool_input.get("status")
             status = BillStatus(status_raw) if status_raw in _BILL_STATUS else BillStatus.DA_PAGARE
             payer = await resolve_member_id(db, ctx.household_id, tool_input.get("payer"))
+            payer_id = payer or (doc.payer_user_id if doc else None) or ctx.user_id
             unit_id = await resolve_unit_id(db, ctx.household_id, tool_input.get("property_unit"))
+            pm_ref = tool_input.get("payment_method_id") or tool_input.get("payment_method")
+            pm_id = await resolve_payment_method_id(
+                db, ctx.household_id, pm_ref, payer_id
+            )
             bill_details = tool_input.get("details")
             if not isinstance(bill_details, dict) or not bill_details:
                 bill_details = None
@@ -892,8 +961,9 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             bill = Bill(
                 household_id=ctx.household_id,
                 document_id=doc_id,
-                payer_user_id=payer or (doc.payer_user_id if doc else None),
+                payer_user_id=payer_id,
                 property_unit_id=unit_id,
+                payment_method_id=pm_id,
                 utility_type=utype,
                 supplier=tool_input.get("supplier") or (doc.issuer if doc else None),
                 service_id=tool_input.get("service_id"),

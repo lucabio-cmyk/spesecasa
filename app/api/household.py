@@ -8,10 +8,16 @@ from app.deps import DB, CurrentUser
 from app.enums import UserRole
 from app.models.category import ExpenseCategory
 from app.models.household import Household
+from app.models.payment_method import PaymentMethod
 from app.models.property_unit import PropertyUnit
 from app.models.user import User
 from app.schemas.auth import MemberInvite, MemberUpdate, UserOut
 from app.schemas.category import CategoryCreate, CategoryOut, CategoryUpdate, KnownCategory
+from app.schemas.payment_method import (
+    PaymentMethodCreate,
+    PaymentMethodOut,
+    PaymentMethodUpdate,
+)
 from app.schemas.property_unit import (
     HouseholdSettingsUpdate,
     PropertyUnitCreate,
@@ -342,4 +348,111 @@ async def delete_category(category_id: uuid.UUID, user: CurrentUser, db: DB):
     if not category or category.household_id != user.household_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Categoria non trovata")
     await db.delete(category)
+    await db.commit()
+
+
+# --- Metodi di pagamento (carte/bancomat/... per ogni membro) --------------
+async def _unset_other_default(db: DB, household_id, user_id, keep) -> None:
+    """Un solo metodo predefinito per ciascun membro: azzera il flag sugli altri."""
+    res = await db.execute(
+        select(PaymentMethod).where(
+            PaymentMethod.household_id == household_id,
+            PaymentMethod.user_id == user_id,
+            PaymentMethod.is_default.is_(True),
+        )
+    )
+    for other in res.scalars():
+        if keep is None or other.id != keep:
+            other.is_default = False
+
+
+@router.get("/payment-methods", response_model=list[PaymentMethodOut])
+async def list_payment_methods(
+    user: CurrentUser, db: DB, user_id: uuid.UUID | None = None
+):
+    """Elenco dei metodi di pagamento del nucleo (carte, bancomat, contanti, ...).
+    Filtrabile per intestatario con `user_id`. Usato dalla GUI per gestirli e per
+    indicare con quale strumento è stata pagata una spesa/bolletta."""
+    stmt = (
+        select(PaymentMethod)
+        .where(PaymentMethod.household_id == user.household_id)
+        .order_by(PaymentMethod.is_default.desc(), PaymentMethod.label)
+    )
+    if user_id:
+        stmt = stmt.where(PaymentMethod.user_id == user_id)
+    res = await db.execute(stmt)
+    return list(res.scalars())
+
+
+@router.post("/payment-methods", response_model=PaymentMethodOut, status_code=201)
+async def create_payment_method(body: PaymentMethodCreate, user: CurrentUser, db: DB):
+    """Crea un metodo di pagamento. L'amministratore può intestarlo a qualunque
+    membro (`user_id`); un membro può crearne solo a proprio nome."""
+    is_admin = user.role == UserRole.ADMIN
+    owner_id = body.user_id or user.id
+    if owner_id != user.id and not is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Puoi creare metodi di pagamento solo a tuo nome",
+        )
+    owner = await db.get(User, owner_id)
+    if not owner or owner.household_id != user.household_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Intestatario non trovato")
+    data = body.model_dump(exclude={"user_id"})
+    method = PaymentMethod(
+        household_id=user.household_id, user_id=owner_id, **data
+    )
+    if method.is_default:
+        await _unset_other_default(db, user.household_id, owner_id, keep=None)
+    db.add(method)
+    await db.commit()
+    await db.refresh(method)
+    return method
+
+
+@router.patch("/payment-methods/{method_id}", response_model=PaymentMethodOut)
+async def update_payment_method(
+    method_id: uuid.UUID, body: PaymentMethodUpdate, user: CurrentUser, db: DB
+):
+    is_admin = user.role == UserRole.ADMIN
+    method = await db.get(PaymentMethod, method_id)
+    if not method or method.household_id != user.household_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Metodo di pagamento non trovato")
+    if method.user_id != user.id and not is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Puoi modificare solo i tuoi metodi di pagamento"
+        )
+    data = body.model_dump(exclude_unset=True)
+    new_owner = data.pop("user_id", None)
+    if new_owner is not None and new_owner != method.user_id:
+        if not is_admin:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Solo l'amministratore può cambiare l'intestatario"
+            )
+        owner = await db.get(User, new_owner)
+        if not owner or owner.household_id != user.household_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Intestatario non trovato")
+        method.user_id = new_owner
+    for key, value in data.items():
+        setattr(method, key, value)
+    if method.is_default:
+        await _unset_other_default(db, user.household_id, method.user_id, keep=method.id)
+    await db.commit()
+    await db.refresh(method)
+    return method
+
+
+@router.delete("/payment-methods/{method_id}", status_code=204)
+async def delete_payment_method(method_id: uuid.UUID, user: CurrentUser, db: DB):
+    """Elimina un metodo di pagamento. I documenti/spese/bollette collegati
+    restano (il riferimento viene azzerato: FK ondelete=SET NULL)."""
+    is_admin = user.role == UserRole.ADMIN
+    method = await db.get(PaymentMethod, method_id)
+    if not method or method.household_id != user.household_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Metodo di pagamento non trovato")
+    if method.user_id != user.id and not is_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Puoi eliminare solo i tuoi metodi di pagamento"
+        )
+    await db.delete(method)
     await db.commit()

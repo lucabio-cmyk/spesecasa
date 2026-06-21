@@ -11,6 +11,7 @@ class BillBase(BaseModel):
     document_id: uuid.UUID | None = None
     payer_user_id: uuid.UUID | None = None
     property_unit_id: uuid.UUID | None = None
+    payment_method_id: uuid.UUID | None = None
     utility_type: UtilityType = UtilityType.ALTRO
     supplier: str | None = None
     service_id: str | None = None
@@ -41,6 +42,7 @@ class BillCreate(BillBase):
 class BillUpdate(BaseModel):
     payer_user_id: uuid.UUID | None = None
     property_unit_id: uuid.UUID | None = None
+    payment_method_id: uuid.UUID | None = None
     utility_type: UtilityType | None = None
     supplier: str | None = None
     service_id: str | None = None
