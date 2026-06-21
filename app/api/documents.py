@@ -21,6 +21,7 @@ from app.schemas.document import (
 )
 from app.schemas.expense import ExpenseOut
 from app.services import search as search_service
+from app.services.resolvers import member_belongs_to_household
 from app.services.spreadsheets import normalize_mime
 from app.services.storage import file_hash, get_storage
 
@@ -182,7 +183,18 @@ async def update_document(
         raise HTTPException(404, "Documento non trovato")
     # exclude_unset: aggiorna solo i campi inviati, consentendo di azzerare
     # esplicitamente a null i campi opzionali (es. payer/beneficiary).
-    for key, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    # Questi campi sono NOT NULL nel DB: non possono essere azzerati.
+    for field in ("doc_type", "fiscal_classification", "scope"):
+        if field in updates and updates[field] is None:
+            raise HTTPException(422, f"Il campo {field} non può essere nullo")
+    # Isolamento dei dati: pagante/beneficiario devono appartenere al nucleo.
+    for field in ("payer_user_id", "beneficiary_user_id"):
+        if field in updates and not await member_belongs_to_household(
+            db, user.household_id, updates[field]
+        ):
+            raise HTTPException(422, "Soggetto non valido per questo nucleo")
+    for key, value in updates.items():
         setattr(doc, key, value)
     await db.commit()
     await db.refresh(doc)
@@ -231,6 +243,10 @@ async def reprocess(
     doc = await db.get(Document, document_id)
     if not doc or doc.household_id != user.household_id:
         raise HTTPException(404, "Documento non trovato")
+    # Evita race condition tra task in background: se è già in coda o in
+    # elaborazione, non avviare una seconda rielaborazione.
+    if doc.status in (DocumentStatus.PENDING, DocumentStatus.PROCESSING):
+        raise HTTPException(409, "Il documento è già in coda o in elaborazione")
     # Pulizia dei dati derivati dal documento per evitare duplicati: l'agente
     # ri-estrae da capo righe e bollette.
     await db.execute(delete(Expense).where(Expense.document_id == doc.id))

@@ -145,15 +145,27 @@ function promptDialog(title, message, { placeholder = "", okText = "Conferma", v
       ${message ? `<p style="color:var(--text-soft);margin-bottom:14px">${esc(message)}</p>` : ""}
       <textarea class="input" id="prompt-text" rows="4" placeholder="${esc(placeholder)}" style="margin-bottom:22px">${esc(value)}</textarea>
       <div class="row between">
-        <button class="btn btn-ghost" data-act="cancel">Annulla</button>
-        <button class="btn btn-primary" data-act="ok">${esc(okText)}</button>
+        <button class="btn btn-ghost" id="prompt-cancel">Annulla</button>
+        <button class="btn btn-primary" id="prompt-ok">${esc(okText)}</button>
       </div>`);
+    const root = $("#modal-root");
     const ta = $("#prompt-text"); if (ta) ta.focus();
-    $("#modal-root").addEventListener("click", (e) => {
-      const act = e.target.dataset.act;
-      if (act === "ok") { const v = ta ? ta.value : ""; closeModal(); resolve(v); }
-      else if (act === "cancel") { closeModal(); resolve(null); }
-    });
+    // I listener sono legati ai pulsanti interni (rimossi col modale, niente
+    // leak) e gestiamo anche chiusura via overlay/ESC, così la Promise si
+    // risolve sempre (niente promise sospese). 'done' evita doppie risoluzioni.
+    let done = false;
+    const finish = (val) => {
+      if (done) return; done = true;
+      document.removeEventListener("keydown", onEsc);
+      closeModal();
+      resolve(val);
+    };
+    const onEsc = (e) => { if (e.key === "Escape") finish(null); };
+    document.addEventListener("keydown", onEsc);
+    $("#prompt-ok").addEventListener("click", () => finish(ta ? ta.value : ""));
+    $("#prompt-cancel").addEventListener("click", () => finish(null));
+    const overlay = $(".overlay", root);
+    if (overlay) overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) finish(null); });
   });
 }
 

@@ -51,6 +51,18 @@ async def resolve_member_id(
     return None
 
 
+async def member_belongs_to_household(
+    db: AsyncSession, household_id: uuid.UUID, user_id
+) -> bool:
+    """True se l'utente indicato appartiene al nucleo (o se è None: nessun
+    vincolo). Usato per validare payer/beneficiary nelle correzioni manuali ed
+    evitare di attribuire dati a soggetti di un altro nucleo (cross-tenant)."""
+    if user_id is None:
+        return True
+    member = await db.get(User, user_id)
+    return bool(member and member.household_id == household_id)
+
+
 async def resolve_unit_id(
     db: AsyncSession, household_id: uuid.UUID, name_or_id
 ) -> uuid.UUID | None:

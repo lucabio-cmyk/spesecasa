@@ -12,6 +12,7 @@ from app.enums import (
 )
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
+from app.services.resolvers import member_belongs_to_household
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
@@ -102,6 +103,16 @@ async def update_expense(expense_id: uuid.UUID, body: ExpenseUpdate, user: Curre
     # L'importo della riga è obbligatorio: non può essere azzerato.
     if "line_amount" in updates and updates["line_amount"] is None:
         raise HTTPException(422, "L'importo della riga è obbligatorio")
+    # Questi campi sono NOT NULL nel DB: non possono essere azzerati.
+    for field in ("fiscal_classification", "scope"):
+        if field in updates and updates[field] is None:
+            raise HTTPException(422, f"Il campo {field} non può essere nullo")
+    # Isolamento dei dati: pagante/beneficiario devono appartenere al nucleo.
+    for field in ("payer_user_id", "beneficiary_user_id"):
+        if field in updates and not await member_belongs_to_household(
+            db, user.household_id, updates[field]
+        ):
+            raise HTTPException(422, "Soggetto non valido per questo nucleo")
     for key, value in updates.items():
         setattr(expense, key, value)
     await db.commit()
