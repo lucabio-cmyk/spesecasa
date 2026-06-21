@@ -753,23 +753,32 @@ async function openDocument(id) {
         <button class="btn-icon" data-close>✕</button>
       </div>
       <div class="drawer-body">
-        <div class="row" style="margin-bottom:16px">${badge(doc.status, STATUS_LABELS)} ${badge(doc.fiscal_classification, FISCAL_LABELS)} ${badge(doc.scope, SCOPE_LABELS)}</div>
-        ${doc.summary ? `<div class="card card-pad" style="background:var(--surface-2);margin-bottom:16px"><b>Sintesi</b><p style="margin:6px 0 0;color:var(--text-soft);font-size:14px;white-space:pre-wrap">${esc(doc.summary)}</p></div>` : ""}
+        <div class="row" style="margin-bottom:16px">${badge(doc.status, STATUS_LABELS)}<span class="hint" style="margin-left:auto">✏️ I campi sono modificabili: le correzioni si salvano da sole.</span></div>
         ${doc.reliability_note ? `<p class="hint" style="margin-bottom:14px">⚠️ ${esc(doc.reliability_note)}</p>` : ""}
-        <dl class="kv" style="margin-bottom:18px">
-          <dt>Emittente</dt><dd>${esc(doc.issuer || "—")}</dd>
-          <dt>Importo totale</dt><dd><b>${doc.total_amount != null ? eur(doc.total_amount) : "—"}</b></dd>
-          <dt>Data documento</dt><dd>${fmtDate(doc.doc_date)}</dd>
-          <dt>Anno fiscale</dt><dd>${doc.fiscal_year || "—"}</dd>
-          <dt>Pagamento</dt><dd>${esc(doc.payment_method || "—")}</dd>
-          <dt>N. documento</dt><dd>${esc(doc.document_number || "—")}</dd>
-          <dt>Pagante</dt><dd>${esc(memberName(doc.payer_user_id))}</dd>
-          <dt>Beneficiario</dt><dd>${esc(memberName(doc.beneficiary_user_id))}</dd>
-          ${doc.retention_note ? `<dt>Conservazione</dt><dd>${esc(doc.retention_note)}</dd>` : ""}
+        <div class="card card-pad" style="background:var(--surface-2);margin-bottom:16px"><b>Sintesi</b><textarea class="input" data-doc-field="summary" rows="3" style="margin-top:6px;width:100%" placeholder="Sintesi del documento…">${esc(doc.summary || "")}</textarea></div>
+        <dl class="kv kv-edit" style="margin-bottom:18px">
+          <dt>Tipo</dt><dd><select class="select" data-doc-field="doc_type" style="width:100%">${optList(DOCTYPE_LABELS, doc.doc_type)}</select></dd>
+          <dt>Emittente</dt><dd><input class="input" data-doc-field="issuer" value="${esc(doc.issuer || "")}" placeholder="—"></dd>
+          <dt>Importo totale</dt><dd><input class="input" type="number" step="0.01" data-doc-field="total_amount" data-type="number" value="${doc.total_amount ?? ""}" placeholder="0,00"></dd>
+          <dt>Data documento</dt><dd><input class="input" type="date" data-doc-field="doc_date" value="${doc.doc_date || ""}"></dd>
+          <dt>Anno fiscale</dt><dd><input class="input" type="number" data-doc-field="fiscal_year" data-type="number" value="${doc.fiscal_year ?? ""}" placeholder="—"></dd>
+          <dt>Pagamento</dt><dd><input class="input" data-doc-field="payment_method" value="${esc(doc.payment_method || "")}" placeholder="—"></dd>
+          <dt>N. documento</dt><dd><input class="input" data-doc-field="document_number" value="${esc(doc.document_number || "")}" placeholder="—"></dd>
+          <dt>Classificazione</dt><dd><select class="select" data-doc-field="fiscal_classification" style="width:100%">${optList(FISCAL_LABELS, doc.fiscal_classification)}</select></dd>
+          <dt>Ambito</dt><dd><select class="select" data-doc-field="scope" style="width:100%">${optList(SCOPE_LABELS, doc.scope)}</select></dd>
+          <dt>Pagante</dt><dd><select class="select" data-doc-field="payer_user_id" style="width:100%">${optList({ "": "—", ...Object.fromEntries(State.members.map(m => [m.id, m.full_name])) }, doc.payer_user_id || "")}</select></dd>
+          <dt>Beneficiario</dt><dd><select class="select" data-doc-field="beneficiary_user_id" style="width:100%">${optList({ "": "—", ...Object.fromEntries(State.members.map(m => [m.id, m.full_name])) }, doc.beneficiary_user_id || "")}</select></dd>
+          <dt>Conservazione</dt><dd><input class="input" data-doc-field="retention_note" value="${esc(doc.retention_note || "")}" placeholder="—"></dd>
         </dl>
-        ${lines.length ? `<h4 style="margin-bottom:8px">Righe (${lines.length})</h4>
-          <div class="card table-wrap" style="margin-bottom:18px"><table class="data"><thead><tr><th>Descrizione</th><th>Categoria</th><th class="num">Importo</th></tr></thead>
-          <tbody>${lines.map(l => `<tr><td>${esc(l.description_normalized || l.description_original || "—")}</td><td>${esc(l.merch_category || "—")}</td><td class="num">${eur(l.line_amount)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+        ${lines.length ? `<h4 style="margin-bottom:8px">Righe e ripartizione (${lines.length})</h4>
+          <div class="card table-wrap" style="margin-bottom:18px"><table class="data"><thead><tr><th>Descrizione</th><th>Categoria</th><th>Pagante</th><th>Beneficiario</th><th class="num">Importo</th></tr></thead>
+          <tbody>${lines.map(l => `<tr data-line="${l.id}">
+            <td><input class="input" data-exp-field="description_normalized" value="${esc(l.description_normalized || l.description_original || "")}" style="min-width:150px"></td>
+            <td><select class="inline-select" data-exp-field="merch_category">${optList({ "": "—", ...Object.fromEntries(CATEGORIES.map(c => [c, c])) }, l.merch_category || "")}</select></td>
+            <td><select class="inline-select" data-exp-field="payer_user_id">${optList({ "": "—", ...Object.fromEntries(State.members.map(m => [m.id, m.full_name])) }, l.payer_user_id || "")}</select></td>
+            <td><select class="inline-select" data-exp-field="beneficiary_user_id">${optList({ "": "—", ...Object.fromEntries(State.members.map(m => [m.id, m.full_name])) }, l.beneficiary_user_id || "")}</select></td>
+            <td class="num"><input class="input" type="number" step="0.01" data-exp-field="line_amount" data-type="number" value="${l.line_amount ?? ""}" style="width:100px;text-align:right"></td>
+          </tr>`).join("")}</tbody></table></div>` : ""}
         <h4 style="margin-bottom:8px">File originale</h4>
         ${isImg
           ? `<img class="preview-img" src="${fileUrl}" alt="anteprima">`
@@ -783,6 +792,42 @@ async function openDocument(id) {
           <button class="btn btn-danger" data-delete="${id}">🗑️ Elimina</button>
         </div>
       </div>`;
+    // Modifica manuale dei campi del documento (diciture/attribuzioni): ogni
+    // campo si salva al blur/change. Aggiorniamo anche la lista sottostante così
+    // emittente/importo/pagante restano allineati alla chiusura del drawer.
+    const parseVal = (el) => {
+      let val = el.value;
+      if (el.dataset.type === "number") return val === "" ? null : Number(val);
+      return val === "" ? null : val;
+    };
+    body.querySelectorAll("[data-doc-field]").forEach(el => {
+      el.addEventListener("change", async () => {
+        const field = el.dataset.docField;
+        const val = parseVal(el);
+        if (el.dataset.type === "number" && val !== null && Number.isNaN(val)) { toast("Valore non valido", { type: "err" }); return; }
+        try {
+          await api(`/documents/${id}`, { method: "PATCH", body: { [field]: val } });
+          toast("Aggiornato", { type: "ok", timeout: 1500 });
+          loadDocuments();
+        } catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+      });
+    });
+    // Modifica delle righe e della ripartizione (descrizione, categoria,
+    // pagante/beneficiario, importo): salvataggio automatico per riga.
+    body.querySelectorAll("tr[data-line]").forEach(tr => {
+      const lid = tr.dataset.line;
+      tr.querySelectorAll("[data-exp-field]").forEach(el => {
+        el.addEventListener("change", async () => {
+          const field = el.dataset.expField;
+          const val = parseVal(el);
+          if (field === "line_amount" && (val === null || Number.isNaN(val))) { toast("Importo obbligatorio", { type: "err" }); return; }
+          try {
+            await api(`/expenses/${lid}`, { method: "PATCH", body: { [field]: val } });
+            toast("Aggiornato", { type: "ok", timeout: 1500 });
+          } catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+        });
+      });
+    });
     body.querySelector("[data-close]").addEventListener("click", closeModal);
     body.querySelector("[data-reprocess]").addEventListener("click", async () => {
       try { await api(`/documents/${id}/reprocess`, { method: "POST" }); toast("Rielaborazione avviata", { type: "warn" }); closeModal(); loadDocuments(); }

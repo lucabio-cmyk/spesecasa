@@ -98,7 +98,11 @@ async def update_expense(expense_id: uuid.UUID, body: ExpenseUpdate, user: Curre
         raise HTTPException(404, "Spesa non trovata")
     # exclude_unset: aggiorna solo i campi inviati, consentendo di azzerare
     # esplicitamente a null campi opzionali (es. payer/beneficiary).
-    for key, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    # L'importo della riga è obbligatorio: non può essere azzerato.
+    if "line_amount" in updates and updates["line_amount"] is None:
+        raise HTTPException(422, "L'importo della riga è obbligatorio")
+    for key, value in updates.items():
         setattr(expense, key, value)
     await db.commit()
     await db.refresh(expense)

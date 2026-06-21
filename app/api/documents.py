@@ -12,7 +12,7 @@ from app.deps import DB, CurrentUser
 from app.enums import DocumentStatus, DocumentType
 from app.models.document import Document
 from app.models.expense import Expense
-from app.schemas.document import DocumentOut, DocumentSearchHit
+from app.schemas.document import DocumentOut, DocumentSearchHit, DocumentUpdate
 from app.schemas.expense import ExpenseOut
 from app.services import search as search_service
 from app.services.spreadsheets import normalize_mime
@@ -160,6 +160,24 @@ async def get_document(document_id: uuid.UUID, user: CurrentUser, db: DB):
     doc = await db.get(Document, document_id)
     if not doc or doc.household_id != user.household_id:
         raise HTTPException(404, "Documento non trovato")
+    return doc
+
+
+@router.patch("/{document_id}", response_model=DocumentOut)
+async def update_document(
+    document_id: uuid.UUID, body: DocumentUpdate, user: CurrentUser, db: DB
+):
+    """Correzione manuale dei campi di un documento (diciture, importi,
+    classificazione e attribuzione). Aggiorna solo i campi inviati."""
+    doc = await db.get(Document, document_id)
+    if not doc or doc.household_id != user.household_id:
+        raise HTTPException(404, "Documento non trovato")
+    # exclude_unset: aggiorna solo i campi inviati, consentendo di azzerare
+    # esplicitamente a null i campi opzionali (es. payer/beneficiary).
+    for key, value in body.model_dump(exclude_unset=True).items():
+        setattr(doc, key, value)
+    await db.commit()
+    await db.refresh(doc)
     return doc
 
 
