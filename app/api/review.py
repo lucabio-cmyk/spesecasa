@@ -7,7 +7,7 @@ consenso dell'utente, qui con Approva/Rifiuta/Archivia.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import case, func, select
@@ -121,7 +121,7 @@ async def reject_item(item_id: uuid.UUID, user: CurrentUser, db: DB):
     """Rifiuta la proposta: non sarà più riproposta."""
     item = await _get_item(db, user.household_id, item_id)
     item.status = ReviewStatus.REJECTED
-    item.resolved_at = datetime.utcnow()
+    item.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
     item.resolved_by_user_id = user.id
     await db.commit()
     await db.refresh(item)
@@ -133,7 +133,7 @@ async def dismiss_item(item_id: uuid.UUID, user: CurrentUser, db: DB):
     """Archivia un avviso senza azione: non sarà più riproposto."""
     item = await _get_item(db, user.household_id, item_id)
     item.status = ReviewStatus.DISMISSED
-    item.resolved_at = datetime.utcnow()
+    item.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
     item.resolved_by_user_id = user.id
     await db.commit()
     await db.refresh(item)

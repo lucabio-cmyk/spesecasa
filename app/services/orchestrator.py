@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -134,32 +134,45 @@ async def _check_documents(
 ) -> int:
     """Controlli sui documenti e sulle loro righe. Restituisce il numero di
     avvisi creati/aggiornati."""
-    stmt = select(Document).where(Document.household_id == household_id)
+    # Una sola query con sottoquery aggregate (evita N+1): per ogni documento
+    # otteniamo somma/numero righe collegate e se ha una bolletta collegata.
+    expense_sub = (
+        select(
+            Expense.document_id.label("document_id"),
+            func.coalesce(func.sum(Expense.line_amount), 0).label("lines_sum"),
+            func.count(Expense.id).label("lines_count"),
+        )
+        .where(Expense.household_id == household_id)
+        .group_by(Expense.document_id)
+        .subquery()
+    )
+    bill_sub = (
+        select(Bill.document_id.label("document_id"))
+        .where(Bill.household_id == household_id, Bill.document_id.isnot(None))
+        .group_by(Bill.document_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            Document,
+            func.coalesce(expense_sub.c.lines_sum, 0),
+            func.coalesce(expense_sub.c.lines_count, 0),
+            bill_sub.c.document_id.isnot(None),
+        )
+        .outerjoin(expense_sub, expense_sub.c.document_id == Document.id)
+        .outerjoin(bill_sub, bill_sub.c.document_id == Document.id)
+        .where(Document.household_id == household_id)
+    )
     if document_id:
         stmt = stmt.where(Document.id == document_id)
     if fiscal_year:
         stmt = stmt.where(Document.fiscal_year == fiscal_year)
-    docs = list((await db.execute(stmt)).scalars())
+    rows = (await db.execute(stmt)).all()
     count = 0
 
-    for doc in docs:
-        # Somma delle righe collegate al documento.
-        total_lines = (
-            await db.execute(
-                select(
-                    func.coalesce(func.sum(Expense.line_amount), 0),
-                    func.count(Expense.id),
-                ).where(Expense.document_id == doc.id)
-            )
-        ).one()
-        lines_sum = _q(total_lines[0])
-        lines_count = int(total_lines[1] or 0)
-        # Bolletta collegata? (i documenti-bolletta non hanno righe-spesa)
-        has_bill = (
-            await db.execute(
-                select(func.count(Bill.id)).where(Bill.document_id == doc.id)
-            )
-        ).scalar_one() > 0
+    for doc, lines_sum_raw, lines_count_raw, has_bill in rows:
+        lines_sum = _q(lines_sum_raw)
+        lines_count = int(lines_count_raw or 0)
 
         label = doc.issuer or doc.original_filename or str(doc.id)[:8]
         fy = doc.fiscal_year
@@ -350,13 +363,15 @@ async def _check_duplicates(
         primary = members_sorted[0]
         dups = members_sorted[1:]
         ids = sorted(str(m.id) for m in members_sorted)
-        sig = "dup:" + ",".join(ids)
         issuer, ddate, total = key
         for dup in dups:
+            # Firma stabile sul singolo documento duplicato: se in futuro un altro
+            # documento entra nello stesso gruppo, le decisioni già prese
+            # dall'utente sugli altri non vengono invalidate/riproposte.
             if await _record(
                 db, household_id,
                 kind=ReviewKind.POSSIBLE_DUPLICATE,
-                signature=f"{sig}:{dup.id}",
+                signature=f"dup:{dup.id}",
                 title=f"Possibile duplicato: {primary.issuer} {total} €",
                 detail=(
                     f"Due documenti dello stesso emittente con la stessa data "
@@ -752,7 +767,7 @@ async def apply_review_item(
         item.resolution_note = note
         # Le colonne DateTime sono naïve (TIMESTAMP WITHOUT TIME ZONE): usa un
         # UTC senza tzinfo per non mischiare naïve/aware in Postgres.
-        item.resolved_at = datetime.utcnow()
+        item.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
         item.resolved_by_user_id = user_id
         await db.commit()
         return {"ok": True, "note": note}

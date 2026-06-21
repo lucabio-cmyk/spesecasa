@@ -821,6 +821,9 @@ let reviewStatusTab = "pending";
 async function viewRevisione() {
   const c = $("#content");
   c.innerHTML = skeletonRows();
+  // I cambi di tab richiamano viewRevisione() direttamente (non via navigate):
+  // svuota la topbar per non accumulare pulsanti "Verifica ora" duplicati.
+  $("#topbar-actions").innerHTML = "";
   // Pulsante "Verifica ora" nella topbar.
   const runBtn = document.createElement("button");
   runBtn.className = "btn btn-primary";
