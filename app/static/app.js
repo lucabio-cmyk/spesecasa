@@ -249,6 +249,7 @@ function renderAuth(mode = "login") {
 /* ---------- App shell ---------- */
 const NAV = [
   { id: "dashboard", icon: "📊", label: "Dashboard" },
+  { id: "analisi", icon: "📈", label: "Analisi" },
   { id: "upload", icon: "⬆️", label: "Carica documento" },
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "expenses", icon: "💶", label: "Spese" },
@@ -318,6 +319,7 @@ function navigate(view) {
   app().querySelectorAll("[data-nav]").forEach(b => b.classList.toggle("active", b.dataset.nav === view));
   const titles = {
     dashboard: ["Dashboard", "Panoramica delle spese e dei documenti del nucleo"],
+    analisi: ["Analisi", "Andamento mensile, esercenti, confronto tra anni e osservazioni automatiche"],
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
@@ -331,7 +333,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -493,6 +495,83 @@ async function viewDashboard() {
 
     c.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => navigate(b.dataset.go)));
     bindDrills(c);
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
+}
+
+/* ---------- View: Analisi (analisi avanzate) ---------- */
+function pctBadge(pct, { invert = false } = {}) {
+  // invert=false: per la SPESA un aumento (pct>0) è "negativo" (rosso),
+  // un calo è "positivo" (verde).
+  if (pct === null || pct === undefined) return `<span class="hint">—</span>`;
+  const up = pct > 0;
+  const good = invert ? up : !up;
+  const color = pct === 0 ? "var(--text-faint)" : good ? "#15803d" : "#dc2626";
+  const arrow = pct === 0 ? "→" : up ? "▲" : "▼";
+  return `<span style="color:${color};font-weight:700;white-space:nowrap">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+}
+
+function insightCard(i) {
+  const bg = { positive: "var(--green-100)", warning: "var(--amber-100)", info: "var(--blue-100)" }[i.severity] || "var(--blue-100)";
+  const fg = { positive: "#15803d", warning: "#b45309", info: "#1d4ed8" }[i.severity] || "#1d4ed8";
+  return `<div class="card card-pad" style="display:flex;gap:12px;align-items:flex-start">
+      <span class="ico-box" style="background:${bg};color:${fg};flex-shrink:0">${i.icon || "💡"}</span>
+      <div><b>${esc(i.title)}</b><div class="sub" style="color:var(--text-soft);font-size:13px;margin-top:2px">${esc(i.detail || "")}</div></div>
+    </div>`;
+}
+
+async function viewAnalisi() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  $("#topbar-actions").appendChild(await yearSelector(viewAnalisi));
+  // Le analisi mensili/confronto/insight sono per anno: se "Tutti gli anni" è
+  // selezionato, usiamo l'anno corrente come riferimento.
+  const year = State.year || new Date().getFullYear();
+  const yq = `?year=${year}`;
+  try {
+    const [insights, monthly, top, cmp] = await Promise.all([
+      api(`/stats/insights${yq}`),
+      api(`/stats/monthly${yq}`),
+      api(`/stats/top-merchants${yq}&limit=10`),
+      api(`/stats/compare${yq}`),
+    ]);
+
+    const monthRows = monthly.map(m => ({ label: m.label, total: m.total }));
+    const merchRows = top.map(m => ({ label: m.merchant, total: m.total }));
+    const cmpRows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0).slice(0, 12);
+
+    const kpis = [
+      { label: `Totale ${year}`, value: eur(cmp.current_total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${cmp.by_category.length} categori${cmp.by_category.length === 1 ? "a" : "e"}` },
+      { label: `Totale ${cmp.previous_year}`, value: eur(cmp.previous_total), icon: "🗓️", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "anno precedente" },
+      { label: "Variazione", value: cmp.delta_pct === null ? "—" : `${cmp.delta_pct > 0 ? "+" : ""}${cmp.delta_pct.toFixed(1)}%`, icon: cmp.delta >= 0 ? "📈" : "📉", bg: cmp.delta >= 0 ? "var(--amber-100)" : "var(--green-100)", fg: cmp.delta >= 0 ? "#b45309" : "#15803d", delta: `${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)} sul ${cmp.previous_year}` },
+      { label: "Osservazioni", value: insights.length, icon: "💡", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "rilevate per il periodo" },
+    ];
+
+    const cmpTable = cmpRows.length ? `<div class="table-wrap"><table class="data">
+        <thead><tr><th>Categoria</th><th class="num">${year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
+        <tbody>${cmpRows.map(r => `<tr>
+            <td>${esc(r.category)}</td>
+            <td class="num">${eur(r.current)}</td>
+            <td class="num" style="color:var(--text-soft)">${eur(r.previous)}</td>
+            <td class="num">${pctBadge(r.delta_pct)}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>` : `<div class="empty"><div class="big">📭</div><p>Nessun dato da confrontare.</p></div>`;
+
+    c.innerHTML = `
+      ${kpiGrid(kpis)}
+
+      <div class="card card-pad" style="margin-top:16px">
+        <div class="row between" style="margin-bottom:16px"><h3>Osservazioni automatiche</h3><span class="hint">Anno ${year}</span></div>
+        <div class="grid cols-2" style="gap:12px">${insights.map(insightCard).join("")}</div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:16px">
+        ${chartCard(`Andamento mensile ${year}`, barChart(monthRows, { labelKey: "label", valueKey: "total" }), { sub: "Spese + bollette per mese" })}
+        ${chartCard("Dove spendi di più", barChart(merchRows, { labelKey: "label", valueKey: "total" }), { sub: "Esercenti/fornitori per importo totale" })}
+      </div>
+
+      ${chartCard(`Confronto ${cmp.previous_year} → ${year}`, cmpTable, { action: `<span class="hint">Variazione per categoria</span>`, style: "margin-top:16px" })}`;
   } catch (err) {
     c.innerHTML = errorBox(err.message);
   }
@@ -1101,11 +1180,14 @@ async function viewSettings() {
   const c = $("#content");
   c.innerHTML = skeletonRows();
   try {
-    const [hh, members, units] = await Promise.all([
+    const [hh, members, units, categories] = await Promise.all([
       api("/household"), api("/household/members"), api("/household/units").catch(() => []),
+      api("/household/categories").catch(() => []),
     ]);
     State.members = members; indexMembers();
     State.units = units || [];
+    const customCats = (categories || []).filter(c => !c.builtin);
+    const builtinCats = (categories || []).filter(c => c.builtin);
     const isAdmin = State.user?.role === "admin";
     $("#topbar-actions").innerHTML = "";
     const exportBtn = document.createElement("a");
@@ -1156,6 +1238,26 @@ async function viewSettings() {
       </div>
 
       <div class="card card-pad" style="margin-top:16px">
+        <div class="row between" style="margin-bottom:6px">
+          <h3>🏷️ Categorie merceologiche</h3>
+          <button class="btn btn-primary btn-sm" id="add-category">+ Aggiungi categoria</button>
+        </div>
+        <p class="hint" style="margin-bottom:14px">Le categorie di base coprono la spesa quotidiana. L'assistente può <b>creare nuove categorie</b> quando nessuna è adatta (es. abbigliamento, trasporti, ristorazione); qui le puoi rivedere, modificare o eliminare. Le spese già classificate restano nello storico anche se elimini una categoria.</p>
+        ${customCats.length ? `<div class="table-wrap"><table class="data">
+          <thead><tr><th>Categoria</th><th>Descrizione</th><th>Esempi</th><th>Origine</th><th></th></tr></thead>
+          <tbody>${customCats.map(c => `<tr>
+            <td><b>${esc(c.name)}</b></td>
+            <td class="hint">${esc(c.description || "—")}</td>
+            <td class="hint">${esc((c.examples || []).join(", ") || "—")}</td>
+            <td>${c.source === "agent" ? `<span class="badge b-non_rilevante">assistente</span>` : `<span class="badge b-familiare">manuale</span>`}</td>
+            <td class="num row" style="gap:4px;justify-content:flex-end"><button class="btn-icon" data-edit-cat="${c.id}" title="Modifica">✏️</button><button class="btn-icon" data-del-cat="${c.id}" title="Elimina">🗑️</button></td>
+          </tr>`).join("")}</tbody></table></div>` : `<div class="empty" style="padding:18px"><p class="hint">Nessuna categoria personalizzata: per ora si usano le ${builtinCats.length} categorie di base.</p></div>`}
+        <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">Mostra le ${builtinCats.length} categorie di base</summary>
+          <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${builtinCats.map(c => `<span class="badge b-non_rilevante" title="${esc(c.description || "")}">${esc(c.name)}</span>`).join("")}</div>
+        </details>
+      </div>
+
+      <div class="card card-pad" style="margin-top:16px">
         <h3 style="margin-bottom:6px">🧠 Addestramento assistente</h3>
         <p class="hint" style="margin-bottom:14px">Istruzioni libere che l'assistente seguirà per questo nucleo: convenzioni, come trattare casi ricorrenti, quale unità considerare di default per il condominio, preferenze di classificazione. Vengono aggiunte al suo contesto.</p>
         <textarea class="input" id="agent-instructions" rows="6" placeholder="Es. La nostra unità nel condominio Aurora è l'interno 5, intestata a Mario Rossi. Per le bollette del gas considerare la seconda casa solo se citato 'Via Verdi'." ${isAdmin ? "" : "disabled"}>${esc(hh.agent_instructions || "")}</textarea>
@@ -1175,6 +1277,13 @@ async function viewSettings() {
     c.querySelectorAll("[data-del-unit]").forEach(b => b.addEventListener("click", async () => {
       if (!(await confirmDialog("Eliminare l'unità?", "Le bollette collegate resteranno, ma senza associazione all'unità."))) return;
       try { await api(`/household/units/${b.dataset.delUnit}`, { method: "DELETE" }); toast("Unità eliminata", { type: "ok" }); viewSettings(); }
+      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    }));
+    $("#add-category")?.addEventListener("click", () => openCategoryForm());
+    c.querySelectorAll("[data-edit-cat]").forEach(b => b.addEventListener("click", () => openCategoryForm(customCats.find(x => x.id === b.dataset.editCat))));
+    c.querySelectorAll("[data-del-cat]").forEach(b => b.addEventListener("click", async () => {
+      if (!(await confirmDialog("Eliminare la categoria?", "Le spese già classificate con questo nome restano nello storico. L'assistente non la proporrà più."))) return;
+      try { await api(`/household/categories/${b.dataset.delCat}`, { method: "DELETE" }); toast("Categoria eliminata", { type: "ok" }); viewSettings(); }
       catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
     }));
     $("#save-instructions")?.addEventListener("click", async () => {
@@ -1222,6 +1331,32 @@ function openUnitForm(unit = null) {
       if (unit) await api(`/household/units/${unit.id}`, { method: "PATCH", body });
       else await api("/household/units", { method: "POST", body });
       toast(unit ? "Unità aggiornata" : "Unità aggiunta", { type: "ok" });
+      closeModal(); viewSettings();
+    } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
+  });
+}
+
+function openCategoryForm(category = null) {
+  const cat = category || {};
+  openModal(`
+    <div class="modal-head"><h3>${category ? "Modifica categoria" : "Nuova categoria merceologica"}</h3><button class="btn-icon" data-close>✕</button></div>
+    <form id="category-form">
+      <div class="field"><label>Nome <span class="hint">(breve, minuscolo)</span></label><input class="input" name="name" placeholder="es. abbigliamento" value="${esc(cat.name || "")}" required></div>
+      <div class="field"><label>Descrizione <span class="hint">(cosa include)</span></label><input class="input" name="description" placeholder="es. vestiti e calzature" value="${esc(cat.description || "")}"></div>
+      <div class="field"><label>Esempi <span class="hint">(separati da virgola)</span></label><input class="input" name="examples" placeholder="es. scarpe, giacca, jeans" value="${esc((cat.examples || []).join(", "))}"></div>
+      <p class="hint" style="margin-bottom:16px">Non creare categorie per i medicinali: usa quella di base “farmaci”.</p>
+      <button class="btn btn-primary btn-block" type="submit">${category ? "Salva" : "Crea categoria"}</button>
+    </form>`);
+  $("#modal-root [data-close]").addEventListener("click", closeModal);
+  $("#category-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const examples = (fd.examples || "").split(",").map(s => s.trim()).filter(Boolean);
+    const body = { name: fd.name, description: fd.description || null, examples: examples.length ? examples : null };
+    try {
+      if (category) await api(`/household/categories/${category.id}`, { method: "PATCH", body });
+      else await api("/household/categories", { method: "POST", body });
+      toast(category ? "Categoria aggiornata" : "Categoria creata", { type: "ok" });
       closeModal(); viewSettings();
     } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
   });

@@ -30,8 +30,12 @@ soggetto e archivia.
   originale archiviato — PDF/immagine — per analizzarlo di nuovo su richiesta),
   `save_document` (header), `add_expenses` (righe/movimenti), `record_expense`
   (spesa da chat), `find_expenses`/`delete_expense` (ricerca e cancellazione
-  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`,
-  `query_bills`, `get_yearly_summary`. Il dispatcher risolve i nomi soggetto→id e
+  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`
+  (aggregati + opzioni `include_monthly`/`include_top_merchants`/`include_comparison`),
+  `query_bills` (costi/andamento/scadenzario + `include_monthly`),
+  `get_yearly_summary`, `get_insights` (osservazioni automatiche sull'anno),
+  `create_expense_category` (crea una categoria merceologica nuova quando nessuna
+  di quelle note è adatta). Il dispatcher risolve i nomi soggetto→id e
   calcola l'anno fiscale. `read_document` restituisce il file come blocco
   contenuto: il runner lo allega alla risposta dello strumento (chiave
   `_content_blocks`) così il modello può vederlo subito.
@@ -58,6 +62,21 @@ soggetto e archivia.
   riferirsi; in upload (no domande) marca `da_verificare` e annota. Le
   rate/quote a carico dell'unità diventano `Bill` (utility_type=condominio) con
   scadenza → scadenzario. `query_bills`/`bills_service` filtrano per unità.
+- **Categorie merceologiche estensibili** (`enums.MERCHANDISE_CATEGORIES` +
+  `MERCHANDISE_CATEGORY_INFO`, `app/models/category.py:ExpenseCategory`,
+  `app/services/categories.py`, tool `create_expense_category`): oltre alle
+  categorie "di base" (stabili, con descrizione), ogni nucleo può avere categorie
+  PERSONALIZZATE (tabella `expense_categories`, scoping per nucleo, con
+  descrizione/esempi/origine). L'agente le crea quando nessuna categoria nota
+  descrive bene una spesa (nome breve/generico/minuscolo) e le riusa: a ogni run
+  il runner inietta nel system prompt le **categorie note** (di base +
+  personalizzate) via `_categories_context`; `merch_category` non è più un enum
+  chiuso negli strumenti (stringa libera) e `add_expenses`/`record_expense`
+  auto-registrano (`categories_service.ensure_categories`) le categorie usate non
+  ancora note, così il catalogo resta allineato. I medicinali restano nella
+  categoria di base `farmaci` (l'agente non crea categorie per dati sanitari).
+  Gestibili da GUI (Impostazioni → Categorie) e via API `GET/POST
+  /household/categories`, `PATCH/DELETE /household/categories/{id}`.
 - **Farmaci (categoria + codici + riservatezza admin)** (`enums.SENSITIVE_CATEGORIES`,
   sezione FARMACI del system prompt, `deps.require_admin`/`AdminUser`): i
   medicinali hanno una categoria merceologica dedicata `farmaci` (distinta da
@@ -113,9 +132,14 @@ soggetto e archivia.
   condominium_name, millesimi, is_primary, notes, details (JSONB)). Unità
   immobiliari del nucleo per la gestione del condominio e l'attribuzione delle
   spese (una sola `is_primary` per nucleo).
+- `ExpenseCategory`(household_id, name (normalizzato, unico per nucleo),
+  description, examples (JSONB), source `agent`/`user`, active). Categorie
+  merceologiche PERSONALIZZATE del nucleo, oltre a quelle di base.
 - Enum salvati come VARCHAR (vedi `app/models/base.py:enum_col`).
-- Categorie merceologiche stabili in `app/enums.py:MERCHANDISE_CATEGORIES`;
-  tipi utenza/stato bolletta in `UtilityType`/`BillStatus`.
+- Categorie merceologiche di base in `app/enums.py:MERCHANDISE_CATEGORIES`
+  (descrizioni in `MERCHANDISE_CATEGORY_INFO`), estendibili per nucleo via
+  `ExpenseCategory`/`app/services/categories.py`; tipi utenza/stato bolletta in
+  `UtilityType`/`BillStatus`.
 
 ## Superficie API (`app/api`)
 - `auth`: `/auth/register` (nuovo nucleo+admin), `/auth/join`, `/auth/login`,
@@ -130,7 +154,9 @@ soggetto e archivia.
   `PATCH /household/members/{id}` (modifica dati membro post-creazione, es.
   codice fiscale: admin su tutti, ciascun membro su se stesso; il ruolo solo
   admin), `DELETE /household/members/{id}`, `GET/POST /household/units`,
-  `PATCH/DELETE /household/units/{id}` (unità immobiliari, gestione admin).
+  `PATCH/DELETE /household/units/{id}` (unità immobiliari, gestione admin),
+  `GET/POST /household/categories` + `PATCH/DELETE /household/categories/{id}`
+  (categorie merceologiche note: di base + personalizzate del nucleo).
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
   `GET /documents/{id}`, `GET /documents/{id}/file`,
@@ -141,7 +167,18 @@ soggetto e archivia.
 - `bills`: `GET/POST /bills`, `GET/PATCH/DELETE /bills/{id}`,
   `POST /bills/{id}/pay`, `/bills/overview|analysis|trend|upcoming|export.csv`.
   Le bollette possono essere collegate a una `PropertyUnit` (`property_unit_id`).
-- `stats`: `/stats/by-category|by-member|by-scope|yearly|fiscal-summary`.
+- `stats`: `/stats/overview|by-category|by-member|by-scope|yearly|fiscal-summary|
+  fiscal-by-member|export.csv`. **Analisi avanzate** (`app/services/stats.py`):
+  `/stats/monthly` (andamento mese per mese di spese+bollette), `/stats/top-merchants`
+  (esercenti su cui si spende di più), `/stats/compare` (confronto con l'anno
+  precedente per categoria), `/stats/insights` (osservazioni automatiche:
+  variazioni, voci principali/in crescita, potenziale fiscale, spese da
+  verificare, documenti da rivedere, scadenze). Gli endpoint per-anno usano
+  l'anno corrente come default; `top-merchants`/`compare`/`insights` rispettano
+  la riservatezza dei farmaci per i non-admin. Lato bollette: `/bills/monthly`
+  e `/bills/analysis` (ora con confronto anno-su-anno: spesa, consumo e costo
+  unitario). Nella GUI la sezione **Analisi** (`viewAnalisi`) mostra insight,
+  andamento mensile, top esercenti e tabella di confronto tra anni.
 - `chat`: `POST /chat` (agente conversazionale sullo storico).
 
 ## Variabili d'ambiente

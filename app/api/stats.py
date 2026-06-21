@@ -1,5 +1,6 @@
 import csv
 import io
+from datetime import date
 
 from fastapi import APIRouter
 from fastapi.responses import Response
@@ -9,6 +10,10 @@ from app.enums import SENSITIVE_CATEGORIES, UserRole
 from app.services import stats as stats_service
 
 router = APIRouter(prefix="/stats", tags=["stats"])
+
+
+def _is_admin(user) -> bool:
+    return user.role == UserRole.ADMIN
 
 
 @router.get("/overview")
@@ -49,6 +54,41 @@ async def fiscal_summary(user: CurrentUser, db: DB, year: int | None = None):
 @router.get("/fiscal-by-member")
 async def fiscal_by_member(user: CurrentUser, db: DB, year: int | None = None):
     return await stats_service.fiscal_by_member(db, user.household_id, year)
+
+
+@router.get("/monthly")
+async def monthly(user: CurrentUser, db: DB, year: int | None = None):
+    """Andamento mensile (gen→dic) di spese e bollette per l'anno indicato
+    (default: anno corrente)."""
+    return await stats_service.monthly(db, user.household_id, year or date.today().year)
+
+
+@router.get("/top-merchants")
+async def top_merchants(
+    user: CurrentUser, db: DB, year: int | None = None, limit: int = 10
+):
+    """Esercenti/fornitori su cui si spende di più. Ai non-amministratori non
+    espone le righe della categoria sensibile farmaci."""
+    limit = max(1, min(limit, 50))
+    return await stats_service.top_merchants(
+        db, user.household_id, year, limit, _is_admin(user)
+    )
+
+
+@router.get("/compare")
+async def compare(user: CurrentUser, db: DB, year: int | None = None):
+    """Confronto dell'anno (default: corrente) con il precedente, per categoria."""
+    return await stats_service.compare_years(
+        db, user.household_id, year or date.today().year, _is_admin(user)
+    )
+
+
+@router.get("/insights")
+async def insights(user: CurrentUser, db: DB, year: int | None = None):
+    """Osservazioni automatiche sulla situazione di spesa del nucleo."""
+    return await stats_service.insights(
+        db, user.household_id, year or date.today().year, _is_admin(user)
+    )
 
 
 @router.get("/export.csv")

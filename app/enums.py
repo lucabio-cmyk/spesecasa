@@ -84,6 +84,27 @@ MERCHANDISE_CATEGORIES: list[str] = [
     "altre spese supermercato",
 ]
 
+# Descrizione sintetica delle categorie merceologiche stabili: guida l'agente
+# nella classificazione e documenta lo storico (mostrata anche in GUI). Non ha
+# valore fiscale vincolante.
+MERCHANDISE_CATEGORY_INFO: dict[str, str] = {
+    "frutta e verdura": "ortofrutta fresca, legumi e frutta secca",
+    "carne e pesce": "carni, salumi, pesce e prodotti ittici",
+    "latticini e uova": "latte, formaggi, yogurt, burro, uova",
+    "pane, forno e colazione": "pane, prodotti da forno, biscotti, cereali, caffè",
+    "pasta, riso e dispensa": "pasta, riso, farine, conserve, condimenti, dispensa secca",
+    "bevande": "acqua, bibite, succhi, vino, birra, alcolici",
+    "surgelati": "prodotti surgelati e gelati",
+    "infanzia": "pannolini, latte e omogeneizzati, prodotti per neonati",
+    "igiene personale": "cura della persona: detergenti, dentifricio, carta igienica",
+    "pulizia casa": "detersivi, prodotti e accessori per la pulizia della casa",
+    "animali": "cibo e accessori per animali domestici",
+    "farmaci": "medicinali con codice del farmaco (AIC/minsan) — dato sanitario",
+    "parafarmacia da supermercato": "integratori generici, cerotti, igiene non medicinale",
+    "casa e cucina": "stoviglie, utensili, piccoli articoli per la casa",
+    "altre spese supermercato": "voci non classificabili nelle altre categorie",
+}
+
 # Categorie merceologiche che contengono dati sanitari sensibili: i FARMACI
 # (es. dallo "scontrino parlante" della farmacia, con codice AIC/minsan) sono
 # dati relativi alla salute. La visualizzazione di DETTAGLIO di queste spese è

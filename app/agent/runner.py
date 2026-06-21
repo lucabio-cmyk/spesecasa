@@ -12,6 +12,7 @@ from app.enums import DocumentStatus, FiscalClassification
 from app.models.document import Document
 from app.models.household import Household
 from app.models.property_unit import PropertyUnit
+from app.services import categories as categories_service
 from app.services.embeddings import index_document
 from app.services.storage import get_storage
 
@@ -82,10 +83,43 @@ async def _household_context(db: AsyncSession, household_id) -> str:
     return ("\n\n" + "\n\n".join(parts)) if parts else ""
 
 
+async def _categories_context(db: AsyncSession, household_id) -> str:
+    """Elenca le categorie merceologiche NOTE al nucleo (di base + personalizzate)
+    nel system prompt, così l'agente riusa quelle esistenti ed evita doppioni; se
+    nessuna è adatta può crearne una nuova con create_expense_category."""
+    known = await categories_service.known_categories(db, household_id)
+    base = [c for c in known if c["builtin"]]
+    custom = [c for c in known if not c["builtin"]]
+
+    base_lines = []
+    for c in base:
+        desc = f" — {c['description']}" if c.get("description") else ""
+        base_lines.append(f"- {c['name']}{desc}")
+    parts = [
+        "CATEGORIE MERCEOLOGICHE NOTE DEL NUCLEO (riusa SEMPRE una di queste quando "
+        "descrive bene la spesa; crea una nuova categoria con create_expense_category "
+        "SOLO se nessuna è adatta, con nome breve/generico/minuscolo). Categorie di "
+        "base:\n" + "\n".join(base_lines)
+    ]
+    if custom:
+        custom_lines = []
+        for c in custom:
+            desc = f" — {c['description']}" if c.get("description") else ""
+            ex = c.get("examples")
+            ex_txt = f" (es. {', '.join(ex)})" if ex else ""
+            custom_lines.append(f"- {c['name']}{desc}{ex_txt}")
+        parts.append(
+            "Categorie personalizzate del nucleo (già create, riusale):\n"
+            + "\n".join(custom_lines)
+        )
+    return "\n\n" + "\n\n".join(parts)
+
+
 async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -> str:
     tools = _build_tools()
     system_text = f"{SYSTEM_PROMPT}\n\nData odierna: {date.today().isoformat()}."
     system_text += await _household_context(db, ctx.household_id)
+    system_text += await _categories_context(db, ctx.household_id)
     # Riservatezza dei farmaci (dati sanitari): l'agente sa se l'interlocutore è
     # amministratore e si comporta di conseguenza.
     if ctx.is_admin:
@@ -179,7 +213,11 @@ async def process_document(db: AsyncSession, document: Document) -> None:
             "'details', e aggiungi parole chiave in 'tags'; 3) usa find_existing_document "
             "per evitare duplicati; 4) classifica fiscalmente e attribuisci soggetto "
             "pagante/beneficiario/ambito; 5) salva l'header con save_document e le righe con "
-            "add_expenses; se è una BOLLETTA/spesa di casa (luce, gas, acqua, rifiuti, "
+            "add_expenses, assegnando a ogni riga una categoria tra quelle NOTE del nucleo "
+            "(creane una nuova con create_expense_category solo se nessuna è adatta) e "
+            "conservando in 'details' i dati strutturati utili realmente presenti (marca, "
+            "unità di misura, peso/volume, codice prodotto, reparto, aliquota IVA, sconto); "
+            "se è una BOLLETTA/spesa di casa (luce, gas, acqua, rifiuti, "
             "internet, condominio, ...) usa invece save_bill estraendo periodo, scadenza, "
             "consumo e costo; 6) concludi con una sintesi pratica in italiano. Non inventare "
             "dati assenti né soglie o percentuali; lascia vuoti i campi non leggibili."

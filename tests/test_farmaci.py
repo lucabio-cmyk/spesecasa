@@ -94,8 +94,14 @@ def test_system_prompt_covers_farmaci_and_codes():
         assert kw in SYSTEM_PROMPT, f"manca '{kw}' nel system prompt"
 
 
-def test_find_expenses_tool_lists_farmaci_category():
+def test_find_expenses_tool_accepts_free_category():
+    # La categoria è ora una stringa libera (non più un enum chiuso) per
+    # supportare le categorie personalizzate del nucleo: 'farmaci' resta un
+    # valore valido e la riservatezza è garantita dal dispatcher (vedi
+    # test_find_expenses_hides_farmaci_for_non_admin nei test del dispatcher).
     from app.agent.tools import TOOLS
 
     tool = next(t for t in TOOLS if t["name"] == "find_expenses")
-    assert "farmaci" in tool["input_schema"]["properties"]["category"]["enum"]
+    prop = tool["input_schema"]["properties"]["category"]
+    assert prop["type"] == "string"
+    assert "enum" not in prop

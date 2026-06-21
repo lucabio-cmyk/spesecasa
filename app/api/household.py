@@ -6,16 +6,19 @@ from sqlalchemy.exc import IntegrityError
 
 from app.deps import DB, CurrentUser
 from app.enums import UserRole
+from app.models.category import ExpenseCategory
 from app.models.household import Household
 from app.models.property_unit import PropertyUnit
 from app.models.user import User
 from app.schemas.auth import MemberInvite, MemberUpdate, UserOut
+from app.schemas.category import CategoryCreate, CategoryOut, CategoryUpdate, KnownCategory
 from app.schemas.property_unit import (
     HouseholdSettingsUpdate,
     PropertyUnitCreate,
     PropertyUnitOut,
     PropertyUnitUpdate,
 )
+from app.services import categories as categories_service
 from app.services.security import hash_password
 
 router = APIRouter(prefix="/household", tags=["household"])
@@ -255,3 +258,84 @@ async def _unset_other_primary(db: DB, household_id, keep) -> None:
     for other in res.scalars():
         if keep is None or other.id != keep:
             other.is_primary = False
+
+
+# --- Categorie merceologiche (di base + personalizzate del nucleo) ---------
+@router.get("/categories", response_model=list[KnownCategory])
+async def list_categories(user: CurrentUser, db: DB):
+    """Tutte le categorie note al nucleo: quelle di base più quelle
+    personalizzate (create dall'assistente o dall'utente). La GUI le usa per i
+    menù di classificazione e per la gestione."""
+    return await categories_service.known_categories(db, user.household_id)
+
+
+@router.post("/categories", response_model=CategoryOut, status_code=201)
+async def create_category(body: CategoryCreate, user: CurrentUser, db: DB):
+    """Crea una categoria personalizzata per il nucleo. Idempotente: se il nome
+    coincide con una categoria esistente (di base o personalizzata) non la
+    duplica."""
+    result = await categories_service.create_category(
+        db,
+        user.household_id,
+        name=body.name,
+        description=body.description,
+        examples=body.examples,
+        source="user",
+    )
+    if result.get("error"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, result["error"])
+    if result.get("builtin"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            result.get("message", "Categoria già esistente tra quelle di base"),
+        )
+    cat_id = result["category"].get("id")
+    category = await db.get(ExpenseCategory, cat_id) if cat_id else None
+    if not category:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Impossibile creare la categoria")
+    return category
+
+
+@router.patch("/categories/{category_id}", response_model=CategoryOut)
+async def update_category(
+    category_id: uuid.UUID, body: CategoryUpdate, user: CurrentUser, db: DB
+):
+    """Modifica una categoria personalizzata (nome, descrizione, esempi, stato).
+    Le categorie di base non sono modificabili."""
+    category = await db.get(ExpenseCategory, category_id)
+    if not category or category.household_id != user.household_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Categoria non trovata")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data and data["name"] is not None:
+        norm, error = categories_service.validate_name(data["name"])
+        if error:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, error)
+        if categories_service.is_builtin(norm):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Esiste già una categoria di base con questo nome"
+            )
+        category.name = norm
+    if "description" in data:
+        category.description = (data["description"] or None)
+    if "examples" in data:
+        category.examples = categories_service._clean_examples(data["examples"])
+    if "active" in data and data["active"] is not None:
+        category.active = data["active"]
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Categoria già esistente")
+    await db.refresh(category)
+    return category
+
+
+@router.delete("/categories/{category_id}", status_code=204)
+async def delete_category(category_id: uuid.UUID, user: CurrentUser, db: DB):
+    """Elimina una categoria personalizzata. Le spese già classificate con quel
+    nome restano invariate nello storico (la categoria è una stringa libera)."""
+    category = await db.get(ExpenseCategory, category_id)
+    if not category or category.household_id != user.household_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Categoria non trovata")
+    await db.delete(category)
+    await db.commit()
