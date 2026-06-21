@@ -670,7 +670,8 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             )
             if not ctx.is_admin:
                 stmt = stmt.where(
-                    func.coalesce(Expense.merch_category, "").notin_(list(SENSITIVE_CATEGORIES))
+                    Expense.merch_category.notin_(list(SENSITIVE_CATEGORIES))
+                    | Expense.merch_category.is_(None)
                 )
             if tool_input.get("fiscal_year"):
                 stmt = stmt.where(Expense.fiscal_year == int(tool_input["fiscal_year"]))

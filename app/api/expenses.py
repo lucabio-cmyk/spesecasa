@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.deps import DB, AdminUser, CurrentUser
 from app.enums import (
@@ -44,10 +44,13 @@ async def list_expenses(
     if payer_user_id:
         stmt = stmt.where(Expense.payer_user_id == payer_user_id)
     # I farmaci sono dati sanitari sensibili: il loro dettaglio è riservato agli
-    # amministratori. Per gli altri membri nascondiamo queste righe (coalesce
-    # per non escludere anche le righe senza categoria, che hanno valore NULL).
+    # amministratori. Per gli altri membri nascondiamo queste righe (l'OR con
+    # is_(None) conserva le righe senza categoria e mantiene l'uso dell'indice).
     if user.role != UserRole.ADMIN:
-        stmt = stmt.where(func.coalesce(Expense.merch_category, "").notin_(_SENSITIVE))
+        stmt = stmt.where(
+            Expense.merch_category.notin_(_SENSITIVE)
+            | Expense.merch_category.is_(None)
+        )
     res = await db.execute(stmt)
     return list(res.scalars())
 

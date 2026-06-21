@@ -830,7 +830,11 @@ async function viewFarmaci() {
         <tbody>${rows.map(r => {
           const d = r.details || {};
           const farmaco = dget(d, ["farmaco", "nome_commerciale", "nome"]) || r.description_normalized || r.description_original || "—";
-          const pa = dget(d, ["principio_attivo", "atc"]);
+          // Principio attivo e codice ATC: mostrali entrambi se disponibili
+          // (es. "Ibuprofene (M01AE01)"), altrimenti quello presente.
+          const activeIngredient = dget(d, ["principio_attivo"]);
+          const atc = dget(d, ["atc"]);
+          const pa = activeIngredient && atc ? `${activeIngredient} (${atc})` : (activeIngredient || atc);
           const code = dget(d, ["codice_aic", "aic"]) || dget(d, ["minsan", "codice_ministeriale"]);
           return `<tr>
             <td class="mono">${fmtDate(r.purchase_date)}</td>
