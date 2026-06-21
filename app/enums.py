@@ -44,6 +44,55 @@ class BillStatus(StrEnum):
     RATEIZZATA = "rateizzata"
 
 
+class PaymentMethodType(StrEnum):
+    """Tipo di strumento di pagamento di un metodo di pagamento del nucleo.
+
+    Ogni metodo (es. "Carta Visa di Mario", "Bancomat conto cointestato") è
+    intestato a un membro e descrive con quale strumento è stata pagata una
+    spesa/bolletta/documento."""
+
+    CARTA_CREDITO = "carta_credito"
+    CARTA_DEBITO = "carta_debito"
+    BANCOMAT = "bancomat"  # carta di debito su circuito nazionale
+    PREPAGATA = "prepagata"
+    CONTANTI = "contanti"
+    BONIFICO = "bonifico"
+    ADDEBITO_DIRETTO = "addebito_diretto"  # RID/SDD/domiciliazione
+    ASSEGNO = "assegno"
+    PAYPAL = "paypal"  # o altri wallet digitali
+    ALTRO = "altro"
+
+
+# Etichetta leggibile dei tipi di metodo di pagamento (GUI e prompt).
+PAYMENT_METHOD_TYPE_INFO: dict[str, str] = {
+    "carta_credito": "Carta di credito",
+    "carta_debito": "Carta di debito",
+    "bancomat": "Bancomat / carta di debito nazionale",
+    "prepagata": "Carta prepagata",
+    "contanti": "Contanti",
+    "bonifico": "Bonifico bancario",
+    "addebito_diretto": "Addebito diretto (RID/SDD/domiciliazione)",
+    "assegno": "Assegno",
+    "paypal": "PayPal / wallet digitale",
+    "altro": "Altro",
+}
+
+# Gli strumenti tracciabili (non contanti): rilevante per la detraibilità fiscale
+# di alcune spese, che spesso richiede pagamento tracciato.
+TRACEABLE_PAYMENT_TYPES: frozenset[str] = frozenset(
+    {
+        "carta_credito",
+        "carta_debito",
+        "bancomat",
+        "prepagata",
+        "bonifico",
+        "addebito_diretto",
+        "assegno",
+        "paypal",
+    }
+)
+
+
 class ReviewSeverity(StrEnum):
     """Gravità di un avviso/proposta dell'agente di orchestrazione."""
 

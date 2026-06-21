@@ -4,6 +4,7 @@ from app.models.category import ExpenseCategory
 from app.models.document import Document
 from app.models.expense import Expense
 from app.models.household import Household
+from app.models.payment_method import PaymentMethod
 from app.models.property_unit import PropertyUnit
 from app.models.review import ReviewItem
 from app.models.user import User
@@ -17,5 +18,6 @@ __all__ = [
     "Bill",
     "PropertyUnit",
     "ExpenseCategory",
+    "PaymentMethod",
     "ReviewItem",
 ]

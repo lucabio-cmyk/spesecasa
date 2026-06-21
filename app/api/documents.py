@@ -21,7 +21,10 @@ from app.schemas.document import (
 )
 from app.schemas.expense import ExpenseOut
 from app.services import search as search_service
-from app.services.resolvers import member_belongs_to_household
+from app.services.resolvers import (
+    member_belongs_to_household,
+    payment_method_belongs_to_household,
+)
 from app.services.spreadsheets import normalize_mime
 from app.services.storage import file_hash, get_storage
 
@@ -105,6 +108,9 @@ async def upload_document(
     doc = Document(
         household_id=user.household_id,
         uploaded_by_user_id=user.id,
+        # Chi carica il documento è il pagante di default: l'agente lo conferma o
+        # lo corregge solo se dal documento emerge un altro soggetto pagante.
+        payer_user_id=user.id,
         original_filename=file.filename or "documento",
         mime_type=mime_type,
         storage_path=path,
@@ -194,6 +200,10 @@ async def update_document(
             db, user.household_id, updates[field]
         ):
             raise HTTPException(422, "Soggetto non valido per questo nucleo")
+    if "payment_method_id" in updates and not await payment_method_belongs_to_household(
+        db, user.household_id, updates["payment_method_id"]
+    ):
+        raise HTTPException(422, "Metodo di pagamento non valido per questo nucleo")
     for key, value in updates.items():
         setattr(doc, key, value)
     await db.commit()

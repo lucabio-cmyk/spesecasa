@@ -34,6 +34,10 @@ class Expense(Base, TimestampMixin):
     beneficiary_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )
+    # Metodo di pagamento usato (carta/bancomat/... intestato a un membro).
+    payment_method_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_methods.id", ondelete="SET NULL"), nullable=True
+    )
 
     purchase_date: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
     merchant: Mapped[str | None] = mapped_column(String(300), nullable=True)

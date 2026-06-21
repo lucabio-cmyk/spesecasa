@@ -34,6 +34,7 @@ class DocumentOut(BaseModel):
     details: dict | None = None
     payer_user_id: uuid.UUID | None = None
     beneficiary_user_id: uuid.UUID | None = None
+    payment_method_id: uuid.UUID | None = None
     reliability_note: str | None = None
     summary: str | None = None
     retention_note: str | None = None
@@ -67,6 +68,7 @@ class DocumentUpdate(BaseModel):
     tags: str | None = None
     payer_user_id: uuid.UUID | None = None
     beneficiary_user_id: uuid.UUID | None = None
+    payment_method_id: uuid.UUID | None = None
     reliability_note: str | None = None
     summary: str | None = None
     retention_note: str | None = None

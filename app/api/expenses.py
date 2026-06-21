@@ -12,7 +12,10 @@ from app.enums import (
 )
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
-from app.services.resolvers import member_belongs_to_household
+from app.services.resolvers import (
+    member_belongs_to_household,
+    payment_method_belongs_to_household,
+)
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
 
@@ -86,6 +89,9 @@ async def list_farmaci(
 @router.post("", response_model=ExpenseOut, status_code=201)
 async def create_expense(body: ExpenseCreate, user: CurrentUser, db: DB):
     expense = Expense(household_id=user.household_id, **body.model_dump(exclude_none=True))
+    # Pagante di default: l'utente che registra la spesa, se non già indicato.
+    if expense.payer_user_id is None:
+        expense.payer_user_id = user.id
     db.add(expense)
     await db.commit()
     await db.refresh(expense)
@@ -113,6 +119,10 @@ async def update_expense(expense_id: uuid.UUID, body: ExpenseUpdate, user: Curre
             db, user.household_id, updates[field]
         ):
             raise HTTPException(422, "Soggetto non valido per questo nucleo")
+    if "payment_method_id" in updates and not await payment_method_belongs_to_household(
+        db, user.household_id, updates["payment_method_id"]
+    ):
+        raise HTTPException(422, "Metodo di pagamento non valido per questo nucleo")
     for key, value in updates.items():
         setattr(expense, key, value)
     await db.commit()

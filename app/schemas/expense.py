@@ -11,6 +11,7 @@ class ExpenseBase(BaseModel):
     document_id: uuid.UUID | None = None
     payer_user_id: uuid.UUID | None = None
     beneficiary_user_id: uuid.UUID | None = None
+    payment_method_id: uuid.UUID | None = None
     purchase_date: date | None = None
     merchant: str | None = None
     description_original: str | None = None
@@ -45,6 +46,7 @@ class ExpenseUpdate(BaseModel):
     scope: ExpenseScope | None = None
     payer_user_id: uuid.UUID | None = None
     beneficiary_user_id: uuid.UUID | None = None
+    payment_method_id: uuid.UUID | None = None
     reliability_note: str | None = None
 
 
