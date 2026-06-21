@@ -58,6 +58,20 @@ soggetto e archivia.
   riferirsi; in upload (no domande) marca `da_verificare` e annota. Le
   rate/quote a carico dell'unità diventano `Bill` (utility_type=condominio) con
   scadenza → scadenzario. `query_bills`/`bills_service` filtrano per unità.
+- **Farmaci (categoria + codici + riservatezza admin)** (`enums.SENSITIVE_CATEGORIES`,
+  sezione FARMACI del system prompt, `deps.require_admin`/`AdminUser`): i
+  medicinali hanno una categoria merceologica dedicata `farmaci` (distinta da
+  `parafarmacia da supermercato`). Dallo "scontrino parlante"/ricevuta sanitaria
+  l'agente estrae il codice del farmaco (AIC/minsan) e lo cerca online con
+  `web_search` su fonti autorevoli (banca dati AIFA) per identificare nome
+  commerciale, principio attivo e ATC, salvandoli in `Expense.details`
+  (`codice_aic`, `minsan`, `farmaco`, `principio_attivo`, `atc`). Essendo dati
+  sanitari sensibili, la **visualizzazione di dettaglio dei farmaci è riservata
+  agli amministratori**: `GET /expenses/farmaci` (solo admin) alimenta la vista
+  "Farmaci" della GUI (nel menu solo per gli admin); `GET /expenses` e
+  `GET /stats/by-category` nascondono la categoria ai non-admin; l'agente di chat
+  riceve `is_admin` (`AgentContext.is_admin`) e per i non-admin esclude i farmaci
+  da `find_expenses`/`query_expenses` e rifiuta di rivelarne il dettaglio.
 - **Addestramento dell'agente** (`Household.agent_instructions`, runner
   `_household_context`): istruzioni libere del nucleo + elenco unità immobiliari
   vengono iniettate nel system prompt a ogni run, così l'agente impara le
@@ -121,7 +135,9 @@ soggetto e archivia.
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
   `GET /documents/{id}`, `GET /documents/{id}/file`,
   `POST /documents/{id}/reprocess`.
-- `expenses`: `GET/POST /expenses`, `PATCH /expenses/{id}` (correzione/verifica).
+- `expenses`: `GET/POST /expenses`, `PATCH /expenses/{id}` (correzione/verifica),
+  `GET /expenses/farmaci` (catalogo medicinali, **solo admin**). `GET /expenses`
+  nasconde la categoria `farmaci` ai non-admin (dato sanitario sensibile).
 - `bills`: `GET/POST /bills`, `GET/PATCH/DELETE /bills/{id}`,
   `POST /bills/{id}/pay`, `/bills/overview|analysis|trend|upcoming|export.csv`.
   Le bollette possono essere collegate a una `PropertyUnit` (`property_unit_id`).

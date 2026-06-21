@@ -86,6 +86,22 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
     tools = _build_tools()
     system_text = f"{SYSTEM_PROMPT}\n\nData odierna: {date.today().isoformat()}."
     system_text += await _household_context(db, ctx.household_id)
+    # Riservatezza dei farmaci (dati sanitari): l'agente sa se l'interlocutore è
+    # amministratore e si comporta di conseguenza.
+    if ctx.is_admin:
+        system_text += (
+            "\n\nL'utente con cui stai parlando è AMMINISTRATORE del nucleo: può "
+            "vedere il dettaglio dei farmaci."
+        )
+    else:
+        system_text += (
+            "\n\nL'utente con cui stai parlando NON è amministratore del nucleo: "
+            "NON rivelare il dettaglio dei farmaci (nomi commerciali, principio "
+            "attivo, codici AIC/minsan, quantità, beneficiario). Se li chiede, "
+            "spiega con cortesia che la consultazione dei farmaci è riservata "
+            "all'amministratore del nucleo. Puoi comunque rispondere su tutto il "
+            "resto."
+        )
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
         resp = await client.messages.create(
@@ -196,9 +212,18 @@ async def process_document(db: AsyncSession, document: Document) -> None:
         await db.commit()
 
 
-async def chat(db: AsyncSession, household_id, user_id, history: list[dict], message: str) -> str:
+async def chat(
+    db: AsyncSession,
+    household_id,
+    user_id,
+    history: list[dict],
+    message: str,
+    is_admin: bool = False,
+) -> str:
     """Agente conversazionale per interrogazioni ('quanto ho speso in farmaci nel 2025?')."""
-    ctx = AgentContext(household_id=household_id, user_id=user_id, document_id=None)
+    ctx = AgentContext(
+        household_id=household_id, user_id=user_id, document_id=None, is_admin=is_admin
+    )
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": message})
     return await _run_loop(db, ctx, messages) or "Non ho una risposta."

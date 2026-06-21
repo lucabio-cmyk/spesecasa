@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.deps import DB, CurrentUser
+from app.enums import UserRole
 from app.schemas.chat import ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -16,5 +17,6 @@ async def chat_endpoint(body: ChatRequest, user: CurrentUser, db: DB):
         user.id,
         [m.model_dump() for m in body.history],
         body.message,
+        is_admin=user.role == UserRole.ADMIN,
     )
     return ChatResponse(answer=answer)

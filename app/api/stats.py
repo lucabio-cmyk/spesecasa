@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 
 from app.deps import DB, CurrentUser
+from app.enums import SENSITIVE_CATEGORIES, UserRole
 from app.services import stats as stats_service
 
 router = APIRouter(prefix="/stats", tags=["stats"])
@@ -17,7 +18,12 @@ async def overview(user: CurrentUser, db: DB, year: int | None = None):
 
 @router.get("/by-category")
 async def by_category(user: CurrentUser, db: DB, year: int | None = None):
-    return await stats_service.by_category(db, user.household_id, year)
+    rows = await stats_service.by_category(db, user.household_id, year)
+    # La categoria "farmaci" è un dato sanitario sensibile: ai non-amministratori
+    # non mostriamo nemmeno l'aggregato per categoria.
+    if user.role != UserRole.ADMIN:
+        rows = [r for r in rows if r["category"] not in SENSITIVE_CATEGORIES]
+    return rows
 
 
 @router.get("/by-member")

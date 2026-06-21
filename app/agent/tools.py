@@ -12,6 +12,7 @@ from app.enums import (
     ExpenseScope,
     FiscalClassification,
     MERCHANDISE_CATEGORIES,
+    SENSITIVE_CATEGORIES,
     UTILITY_DEFAULT_UNIT,
     UtilityType,
 )
@@ -68,6 +69,11 @@ class AgentContext:
     household_id: uuid.UUID
     user_id: uuid.UUID
     document_id: uuid.UUID | None = None
+    # Se l'utente con cui si conversa è amministratore del nucleo. I dati dei
+    # farmaci (sanitari) sono visibili solo agli amministratori: per gli altri
+    # le query li escludono. In elaborazione di un upload (nessun interlocutore)
+    # resta True, così l'estrazione/archiviazione è sempre completa.
+    is_admin: bool = True
 
 
 # --- Schemi degli strumenti esposti al modello -----------------------------
@@ -648,15 +654,29 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             }
 
         if name == "find_expenses":
+            requested_cat = tool_input.get("category")
+            # I farmaci sono dati sanitari riservati agli amministratori: se chi
+            # conversa non lo è, non restituirli.
+            if not ctx.is_admin and requested_cat in SENSITIVE_CATEGORIES:
+                return {
+                    "count": 0,
+                    "expenses": [],
+                    "note": "Il dettaglio dei farmaci è riservato all'amministratore del nucleo.",
+                }
             stmt = (
                 select(Expense)
                 .where(Expense.household_id == ctx.household_id)
                 .order_by(Expense.purchase_date.desc().nullslast(), Expense.created_at.desc())
             )
+            if not ctx.is_admin:
+                stmt = stmt.where(
+                    Expense.merch_category.notin_(list(SENSITIVE_CATEGORIES))
+                    | Expense.merch_category.is_(None)
+                )
             if tool_input.get("fiscal_year"):
                 stmt = stmt.where(Expense.fiscal_year == int(tool_input["fiscal_year"]))
-            if tool_input.get("category"):
-                stmt = stmt.where(Expense.merch_category == tool_input["category"])
+            if requested_cat:
+                stmt = stmt.where(Expense.merch_category == requested_cat)
             pdate = to_date(tool_input.get("purchase_date"))
             if pdate:
                 stmt = stmt.where(Expense.purchase_date == pdate)
@@ -809,8 +829,12 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
 
         if name == "query_expenses":
             year = tool_input.get("fiscal_year")
+            by_cat = await stats_service.by_category(db, ctx.household_id, year)
+            if not ctx.is_admin:
+                # Nascondi l'aggregato dei farmaci ai non-amministratori.
+                by_cat = [r for r in by_cat if r["category"] not in SENSITIVE_CATEGORIES]
             return {
-                "by_category": await stats_service.by_category(db, ctx.household_id, year),
+                "by_category": by_cat,
                 "fiscal_summary": await stats_service.fiscal_summary(db, ctx.household_id, year),
             }
 
