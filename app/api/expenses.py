@@ -85,6 +85,9 @@ async def list_farmaci(
 @router.post("", response_model=ExpenseOut, status_code=201)
 async def create_expense(body: ExpenseCreate, user: CurrentUser, db: DB):
     expense = Expense(household_id=user.household_id, **body.model_dump(exclude_none=True))
+    # Pagante di default: l'utente che registra la spesa, se non già indicato.
+    if expense.payer_user_id is None:
+        expense.payer_user_id = user.id
     db.add(expense)
     await db.commit()
     await db.refresh(expense)

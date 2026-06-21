@@ -34,6 +34,10 @@ class Document(Base, TimestampMixin):
     beneficiary_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )
+    # Metodo di pagamento usato (carta/bancomat/... intestato a un membro).
+    payment_method_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_methods.id", ondelete="SET NULL"), nullable=True
+    )
 
     doc_type: Mapped[DocumentType] = mapped_column(
         enum_col(DocumentType), default=DocumentType.ALTRO

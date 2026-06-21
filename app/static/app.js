@@ -10,6 +10,8 @@ const State = {
   members: [],
   membersById: {},
   units: [],
+  paymentMethods: [],
+  paymentMethodsById: {},
   view: "dashboard",
   year: localStorage.getItem("year") || "",
   theme: localStorage.getItem("theme") || "light",
@@ -50,6 +52,17 @@ const UTILITY_ICONS = {
 const BILL_STATUS_LABELS = {
   da_pagare: "Da pagare", pagata: "Pagata", scaduta: "Scaduta", rateizzata: "Rateizzata",
 };
+const PAYMENT_TYPE_LABELS = {
+  carta_credito: "Carta di credito", carta_debito: "Carta di debito",
+  bancomat: "Bancomat", prepagata: "Prepagata", contanti: "Contanti",
+  bonifico: "Bonifico", addebito_diretto: "Addebito diretto (RID)",
+  assegno: "Assegno", paypal: "PayPal / wallet", altro: "Altro",
+};
+const PAYMENT_TYPE_ICONS = {
+  carta_credito: "💳", carta_debito: "💳", bancomat: "🏧", prepagata: "💳",
+  contanti: "💶", bonifico: "🏦", addebito_diretto: "🔁", assegno: "🧾",
+  paypal: "🅿️", altro: "💼",
+};
 const CATEGORIES = [
   "frutta e verdura","carne e pesce","latticini e uova","pane, forno e colazione",
   "pasta, riso e dispensa","bevande","surgelati","infanzia","igiene personale",
@@ -66,6 +79,12 @@ const fmtDate = (d) => d ? new Date(d).toLocaleDateString("it-IT", { day: "2-dig
 const initials = (name) => (name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
 const memberName = (id) => id ? (State.membersById[id]?.full_name || "—") : "—";
 const unitName = (id) => id ? (State.units.find(u => u.id === id)?.name || "—") : "—";
+const paymentMethodLabel = (id) => {
+  if (!id) return "—";
+  const pm = State.paymentMethodsById[id];
+  if (!pm) return "—";
+  return pm.label + (pm.last4 ? ` ••${pm.last4}` : "");
+};
 const debounce = (fn, ms = 300) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 /* ---------- API ---------- */
@@ -762,6 +781,7 @@ async function openDocument(id) {
           <dt>Data documento</dt><dd>${fmtDate(doc.doc_date)}</dd>
           <dt>Anno fiscale</dt><dd>${doc.fiscal_year || "—"}</dd>
           <dt>Pagamento</dt><dd>${esc(doc.payment_method || "—")}</dd>
+          ${doc.payment_method_id ? `<dt>Metodo</dt><dd>${esc(paymentMethodLabel(doc.payment_method_id))}</dd>` : ""}
           <dt>N. documento</dt><dd>${esc(doc.document_number || "—")}</dd>
           <dt>Pagante</dt><dd>${esc(memberName(doc.payer_user_id))}</dd>
           <dt>Beneficiario</dt><dd>${esc(memberName(doc.beneficiary_user_id))}</dd>
@@ -1268,6 +1288,7 @@ function openBillForm(bill = null) {
       <div class="field"><label>Unità</label><input class="input" name="consumption_unit" placeholder="kWh, Smc, m³" value="${esc(b.consumption_unit || "")}"></div>
       <div class="field"><label>Stato</label><select class="select" name="status">${optList(BILL_STATUS_LABELS, b.status || "da_pagare")}</select></div>
       <div class="field"><label>Intestatario</label><select class="select" name="payer_user_id">${optList({ "": "—", ...Object.fromEntries(memberOpts) }, b.payer_user_id || "")}</select></div>
+      ${State.paymentMethods.length ? `<div class="field"><label>Metodo di pagamento</label><select class="select" name="payment_method_id">${optList({ "": "—", ...Object.fromEntries(State.paymentMethods.filter(pm => pm.active || pm.id === b.payment_method_id).map(pm => [pm.id, `${pm.label}${pm.last4 ? " ••" + pm.last4 : ""} (${memberName(pm.user_id)})`])) }, b.payment_method_id || "")}</select></div>` : ""}
       ${State.units.length ? `<div class="field"><label>Unità immobiliare</label><select class="select" name="property_unit_id">${optList({ "": "—", ...Object.fromEntries(State.units.map(u => [u.id, u.name])) }, b.property_unit_id || "")}</select></div>` : ""}
       <div class="field" style="grid-column:1/-1"><label>Note</label><input class="input" name="notes" value="${esc(b.notes || "")}"></div>
       <div class="row between" style="grid-column:1/-1;margin-top:6px">
@@ -1356,12 +1377,14 @@ async function viewSettings() {
   const c = $("#content");
   c.innerHTML = skeletonRows();
   try {
-    const [hh, members, units, categories] = await Promise.all([
+    const [hh, members, units, categories, methods] = await Promise.all([
       api("/household"), api("/household/members"), api("/household/units").catch(() => []),
       api("/household/categories").catch(() => []),
+      api("/household/payment-methods").catch(() => []),
     ]);
     State.members = members; indexMembers();
     State.units = units || [];
+    State.paymentMethods = methods || []; indexPaymentMethods();
     const customCats = (categories || []).filter(c => !c.builtin);
     const builtinCats = (categories || []).filter(c => c.builtin);
     const isAdmin = State.user?.role === "admin";
@@ -1415,6 +1438,23 @@ async function viewSettings() {
 
       <div class="card card-pad" style="margin-top:16px">
         <div class="row between" style="margin-bottom:6px">
+          <h3>💳 Metodi di pagamento</h3>
+          <button class="btn btn-primary btn-sm" id="add-payment">+ Aggiungi metodo</button>
+        </div>
+        <p class="hint" style="margin-bottom:14px">Censisci le carte, i bancomat e gli altri strumenti con cui i membri del nucleo pagano (carta di credito/debito, prepagata, contanti, bonifico, addebito diretto/RID, PayPal). Ogni metodo è <b>intestato a un membro</b>: collegandolo a spese e bollette ricostruisci con quale strumento (e da chi) è stata pagata una spesa. ${isAdmin ? "Come amministratore puoi gestire i metodi di tutti i membri." : "Puoi gestire i tuoi metodi di pagamento."}</p>
+        ${methods.length ? `<div class="table-wrap"><table class="data">
+          <thead><tr><th>Metodo</th><th>Tipo</th><th>Intestatario</th><th>Ultime 4</th><th></th></tr></thead>
+          <tbody>${methods.map(pm => `<tr>
+            <td><b>${PAYMENT_TYPE_ICONS[pm.method_type] || "💼"} ${esc(pm.label)}</b>${pm.is_default ? ` <span class="badge b-familiare">predefinito</span>` : ""}${pm.active ? "" : ` <span class="badge b-non_rilevante">disattivo</span>`}${pm.provider ? `<div class="hint">${esc(pm.provider)}</div>` : ""}</td>
+            <td>${esc(PAYMENT_TYPE_LABELS[pm.method_type] || pm.method_type)}</td>
+            <td>${esc(memberName(pm.user_id))}</td>
+            <td class="mono">${pm.last4 ? "••" + esc(pm.last4) : "—"}</td>
+            ${(isAdmin || pm.user_id === State.user.id) ? `<td class="num row" style="gap:4px;justify-content:flex-end"><button class="btn-icon" data-edit-pay="${pm.id}" title="Modifica">✏️</button><button class="btn-icon" data-del-pay="${pm.id}" title="Elimina">🗑️</button></td>` : "<td></td>"}
+          </tr>`).join("")}</tbody></table></div>` : `<div class="empty" style="padding:18px"><p class="hint">Nessun metodo di pagamento configurato. Aggiungi le carte/bancomat del nucleo per tracciare con cosa vengono pagate le spese.</p></div>`}
+      </div>
+
+      <div class="card card-pad" style="margin-top:16px">
+        <div class="row between" style="margin-bottom:6px">
           <h3>🏷️ Categorie merceologiche</h3>
           <button class="btn btn-primary btn-sm" id="add-category">+ Aggiungi categoria</button>
         </div>
@@ -1453,6 +1493,13 @@ async function viewSettings() {
     c.querySelectorAll("[data-del-unit]").forEach(b => b.addEventListener("click", async () => {
       if (!(await confirmDialog("Eliminare l'unità?", "Le bollette collegate resteranno, ma senza associazione all'unità."))) return;
       try { await api(`/household/units/${b.dataset.delUnit}`, { method: "DELETE" }); toast("Unità eliminata", { type: "ok" }); viewSettings(); }
+      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    }));
+    $("#add-payment")?.addEventListener("click", () => openPaymentMethodForm(null, isAdmin));
+    c.querySelectorAll("[data-edit-pay]").forEach(b => b.addEventListener("click", () => openPaymentMethodForm(methods.find(x => x.id === b.dataset.editPay), isAdmin)));
+    c.querySelectorAll("[data-del-pay]").forEach(b => b.addEventListener("click", async () => {
+      if (!(await confirmDialog("Eliminare il metodo di pagamento?", "Le spese/bollette collegate restano, ma senza l'associazione al metodo."))) return;
+      try { await api(`/household/payment-methods/${b.dataset.delPay}`, { method: "DELETE" }); toast("Metodo eliminato", { type: "ok" }); viewSettings(); }
       catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
     }));
     $("#add-category")?.addEventListener("click", () => openCategoryForm());
@@ -1533,6 +1580,54 @@ function openCategoryForm(category = null) {
       if (category) await api(`/household/categories/${category.id}`, { method: "PATCH", body });
       else await api("/household/categories", { method: "POST", body });
       toast(category ? "Categoria aggiornata" : "Categoria creata", { type: "ok" });
+      closeModal(); viewSettings();
+    } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
+  });
+}
+
+function openPaymentMethodForm(method = null, isAdmin = false) {
+  const pm = method || {};
+  // L'intestatario è selezionabile solo dagli admin; un membro crea per sé.
+  const ownerId = pm.user_id || State.user.id;
+  const ownerField = isAdmin
+    ? `<div class="field"><label>Intestatario</label><select class="select" name="user_id">${optList(Object.fromEntries(State.members.map(m => [m.id, m.full_name])), ownerId)}</select></div>`
+    : "";
+  openModal(`
+    <div class="modal-head"><h3>${method ? "Modifica metodo di pagamento" : "Nuovo metodo di pagamento"}</h3><button class="btn-icon" data-close>✕</button></div>
+    <form id="payment-form" class="grid cols-2" style="gap:12px">
+      <div class="field" style="grid-column:1/-1"><label>Nome / etichetta</label><input class="input" name="label" placeholder="es. Carta Visa personale, Bancomat conto cointestato" value="${esc(pm.label || "")}" required></div>
+      <div class="field"><label>Tipo</label><select class="select" name="method_type">${optList(PAYMENT_TYPE_LABELS, pm.method_type || "carta_credito")}</select></div>
+      ${ownerField}
+      <div class="field"><label>Circuito / emittente <span class="hint">(opzionale)</span></label><input class="input" name="provider" placeholder="es. Visa, Mastercard, Intesa" value="${esc(pm.provider || "")}"></div>
+      <div class="field"><label>Ultime 4 cifre <span class="hint">(opzionale)</span></label><input class="input" name="last4" maxlength="8" placeholder="1234" value="${esc(pm.last4 || "")}"></div>
+      <div class="field" style="grid-column:1/-1"><label>Note <span class="hint">(opzionale)</span></label><input class="input" name="notes" value="${esc(pm.notes || "")}"></div>
+      <label class="field" style="grid-column:1/-1;flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="is_default" ${pm.is_default ? "checked" : ""}><span>Metodo predefinito di questo intestatario</span></label>
+      ${method ? `<label class="field" style="grid-column:1/-1;flex-direction:row;align-items:center;gap:8px"><input type="checkbox" name="active" ${pm.active === false ? "" : "checked"}><span>Attivo</span></label>` : ""}
+      <p class="hint" style="grid-column:1/-1;margin:0">Non inserire mai il numero completo della carta: bastano le ultime 4 cifre per riconoscerla.</p>
+      <div class="row between" style="grid-column:1/-1;margin-top:6px">
+        <button type="button" class="btn btn-ghost" data-close>Annulla</button>
+        <button type="submit" class="btn btn-primary">${method ? "Salva" : "Aggiungi"}</button>
+      </div>
+    </form>`);
+  $("#modal-root").querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", closeModal));
+  $("#payment-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const fd = Object.fromEntries(new FormData(form).entries());
+    const body = {
+      label: fd.label,
+      method_type: fd.method_type,
+      provider: fd.provider || null,
+      last4: fd.last4 || null,
+      notes: fd.notes || null,
+      is_default: form.querySelector("[name=is_default]").checked,
+    };
+    if (isAdmin && fd.user_id) body.user_id = fd.user_id;
+    if (method) body.active = form.querySelector("[name=active]")?.checked ?? true;
+    try {
+      if (method) await api(`/household/payment-methods/${method.id}`, { method: "PATCH", body });
+      else await api("/household/payment-methods", { method: "POST", body });
+      toast(method ? "Metodo aggiornato" : "Metodo aggiunto", { type: "ok" });
       closeModal(); viewSettings();
     } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
   });
@@ -1637,6 +1732,7 @@ function bindEmpty(wrap) { wrap.querySelectorAll("[data-go]").forEach(b => b.add
 function errorBox(msg) { return `<div class="card card-pad empty"><div class="big">⚠️</div><h3>Qualcosa è andato storto</h3><p>${esc(msg)}</p></div>`; }
 
 function indexMembers() { State.membersById = Object.fromEntries(State.members.map(m => [m.id, m])); }
+function indexPaymentMethods() { State.paymentMethodsById = Object.fromEntries(State.paymentMethods.map(m => [m.id, m])); }
 
 function updateReviewBadge(count) {
   State._reviewCount = count;
@@ -1668,13 +1764,15 @@ async function boot() {
   if (!State.token) { renderAuth("login"); return; }
   try {
     State.user = await api("/auth/me");
-    const [members, hh, units] = await Promise.all([
+    const [members, hh, units, methods] = await Promise.all([
       api("/household/members"),
       api("/household").catch(() => null),
       api("/household/units").catch(() => []),
+      api("/household/payment-methods").catch(() => []),
     ]);
     State.members = members; indexMembers();
     State.units = units || [];
+    State.paymentMethods = methods || []; indexPaymentMethods();
     if (hh) State.user.household_name = hh.name;
     renderShell();
     refreshReviewBadge();

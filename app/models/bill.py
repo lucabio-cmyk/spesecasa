@@ -38,6 +38,10 @@ class Bill(Base, TimestampMixin):
     property_unit_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("property_units.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Metodo di pagamento usato (carta/bancomat/addebito diretto/... di un membro).
+    payment_method_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("payment_methods.id", ondelete="SET NULL"), nullable=True
+    )
 
     utility_type: Mapped[UtilityType] = mapped_column(
         enum_col(UtilityType), default=UtilityType.ALTRO, index=True

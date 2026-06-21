@@ -48,6 +48,9 @@ async def list_bills(
 @router.post("", response_model=BillOut, status_code=201)
 async def create_bill(body: BillCreate, user: CurrentUser, db: DB):
     bill = Bill(household_id=user.household_id, **body.model_dump(exclude_none=True))
+    # Pagante di default: l'utente che registra la bolletta, se non già indicato.
+    if bill.payer_user_id is None:
+        bill.payer_user_id = user.id
     if bill.fiscal_year is None:
         bill.fiscal_year = _derive_fiscal_year(bill)
     db.add(bill)
