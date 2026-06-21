@@ -11,7 +11,6 @@ from app.enums import (
     DocumentType,
     ExpenseScope,
     FiscalClassification,
-    MERCHANDISE_CATEGORIES,
     SENSITIVE_CATEGORIES,
     UTILITY_DEFAULT_UNIT,
     UtilityType,
@@ -22,6 +21,7 @@ from app.models.expense import Expense
 from app.models.property_unit import PropertyUnit
 from app.models.user import User
 from app.services import bills as bills_service
+from app.services import categories as categories_service
 from app.services import search as search_service
 from app.services import stats as stats_service
 from app.services.spreadsheets import is_spreadsheet, spreadsheet_to_text
@@ -62,6 +62,26 @@ _SCOPE = [s.value for s in ExpenseScope]
 _DOC_TYPE = [d.value for d in DocumentType]
 _UTILITY = [u.value for u in UtilityType]
 _BILL_STATUS = [s.value for s in BillStatus]
+
+# Guida alla categoria merceologica: le categorie note (di base + personalizzate
+# del nucleo) sono elencate nel system prompt a ogni run. L'agente deve RIUSARE
+# una categoria esistente quando descrive bene la spesa e, solo se nessuna è
+# adatta, crearne una nuova con create_expense_category (nome breve, generico,
+# minuscolo) e poi usarla qui. I medicinali vanno SEMPRE in "farmaci".
+_CATEGORY_HINT = (
+    "categoria merceologica: riusa una delle categorie note del nucleo (elencate "
+    "nel contesto); se nessuna è adatta creane una nuova con create_expense_category "
+    "e poi indicala qui. I medicinali vanno sempre in 'farmaci'."
+)
+
+# Guida ai dati strutturati da conservare nella riga: arricchisce l'archivio
+# senza inventare nulla. Compila solo ciò che è realmente leggibile.
+_DETAILS_HINT = (
+    "dati strutturati aggiuntivi realmente presenti (non inventare): es. "
+    "{'marca': '...', 'unita_misura': 'kg/l/pz', 'peso_volume': '0.5kg', "
+    "'codice_prodotto': 'EAN/codice', 'reparto': '...', 'aliquota_iva': '4%', "
+    "'tipo_sconto': 'promo/fidelity', 'note': '...'}"
+)
 
 
 @dataclass
@@ -205,7 +225,7 @@ TOOLS = [
                             "merchant": {"type": "string"},
                             "description_original": {"type": "string"},
                             "description_normalized": {"type": "string"},
-                            "merch_category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
+                            "merch_category": {"type": "string", "description": _CATEGORY_HINT},
                             "quantity": {"type": "number"},
                             "unit_price": {"type": "number", "description": "prezzo unitario, se indicato"},
                             "line_amount": {"type": "number"},
@@ -215,7 +235,7 @@ TOOLS = [
                             "payer": {"type": "string"},
                             "beneficiary": {"type": "string"},
                             "fiscal_year": {"type": "integer"},
-                            "details": {"type": "object", "description": "dati aggiuntivi della riga (es. aliquota IVA, reparto, codice prodotto)"},
+                            "details": {"type": "object", "description": _DETAILS_HINT},
                             "reliability_note": {"type": "string"},
                         },
                         "required": ["line_amount"],
@@ -235,7 +255,7 @@ TOOLS = [
                 "merchant": {"type": "string", "description": "negozio o emittente"},
                 "description_original": {"type": "string", "description": "cosa ha detto l'utente"},
                 "description_normalized": {"type": "string", "description": "descrizione chiara e sintetica"},
-                "merch_category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
+                "merch_category": {"type": "string", "description": _CATEGORY_HINT},
                 "quantity": {"type": "number"},
                 "unit_price": {"type": "number", "description": "prezzo unitario, se indicato"},
                 "line_amount": {"type": "number"},
@@ -245,7 +265,7 @@ TOOLS = [
                 "payer": {"type": "string", "description": "nome o id del soggetto pagante"},
                 "beneficiary": {"type": "string", "description": "nome o id del beneficiario"},
                 "fiscal_year": {"type": "integer"},
-                "details": {"type": "object", "description": "dati aggiuntivi della spesa (chiave→valore)"},
+                "details": {"type": "object", "description": _DETAILS_HINT},
                 "reliability_note": {"type": "string"},
             },
             "required": ["line_amount"],
@@ -380,7 +400,7 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string", "description": "testo cercato in negozio/descrizione"},
                 "fiscal_year": {"type": "integer"},
-                "category": {"type": "string", "enum": MERCHANDISE_CATEGORIES},
+                "category": {"type": "string", "description": "categoria merceologica (di base o personalizzata) per filtrare"},
                 "purchase_date": {"type": "string", "description": "AAAA-MM-GG"},
                 "limit": {"type": "integer", "description": "max risultati (default 20)"},
             },
@@ -430,6 +450,34 @@ TOOLS = [
             "properties": {
                 "fiscal_year": {"type": "integer", "description": "anno di riferimento (default: corrente)"},
             },
+        },
+    },
+    {
+        "name": "create_expense_category",
+        "description": (
+            "Crea una NUOVA categoria merceologica per il nucleo, da usare quando NESSUNA "
+            "delle categorie note (di base o già personalizzate, elencate nel contesto) "
+            "descrive bene la spesa. Usala con parsimonia per non frammentare lo storico: "
+            "prima verifica le categorie esistenti. Scegli un nome breve, generico e "
+            "riutilizzabile (minuscolo, es. 'abbigliamento', 'trasporti', 'ristorazione', "
+            "'cura della casa'); aggiungi una descrizione di cosa includere e qualche "
+            "esempio. È idempotente: se la categoria esiste già (o è di base) viene riusata. "
+            "NON creare categorie per i medicinali o per dati sanitari: i farmaci vanno "
+            "sempre nella categoria di base 'farmaci'. Dopo averla creata, indicala come "
+            "merch_category nelle righe di spesa."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "nome breve, generico, minuscolo"},
+                "description": {"type": "string", "description": "cosa include la categoria"},
+                "examples": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "esempi di voci che vi rientrano",
+                },
+            },
+            "required": ["name"],
         },
     },
 ]
@@ -632,8 +680,18 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 )
                 db.add(expense)
                 inserted += 1
+            # Mantieni il catalogo allineato: registra come personalizzate le
+            # categorie usate che non sono di base né già note (stessa transazione).
+            new_categories = await categories_service.ensure_categories(
+                db,
+                ctx.household_id,
+                (line.get("merch_category") for line in tool_input.get("lines", [])),
+            )
             await db.commit()
-            return {"ok": True, "inserted": inserted}
+            result = {"ok": True, "inserted": inserted}
+            if new_categories:
+                result["new_categories"] = new_categories
+            return result
 
         if name == "record_expense":
             amount = to_decimal(tool_input.get("line_amount"))
@@ -670,15 +728,31 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 reliability_note=tool_input.get("reliability_note"),
             )
             db.add(expense)
+            new_categories = await categories_service.ensure_categories(
+                db, ctx.household_id, [tool_input.get("merch_category")]
+            )
             await db.commit()
             await db.refresh(expense)
-            return {
+            result = {
                 "ok": True,
                 "expense_id": str(expense.id),
                 "line_amount": str(expense.line_amount),
                 "fiscal_year": expense.fiscal_year,
                 "payer_user_id": str(expense.payer_user_id) if expense.payer_user_id else None,
             }
+            if new_categories:
+                result["new_categories"] = new_categories
+            return result
+
+        if name == "create_expense_category":
+            return await categories_service.create_category(
+                db,
+                ctx.household_id,
+                name=tool_input.get("name", ""),
+                description=tool_input.get("description"),
+                examples=tool_input.get("examples"),
+                source="agent",
+            )
 
         if name == "find_expenses":
             requested_cat = tool_input.get("category")

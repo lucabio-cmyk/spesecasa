@@ -1180,11 +1180,14 @@ async function viewSettings() {
   const c = $("#content");
   c.innerHTML = skeletonRows();
   try {
-    const [hh, members, units] = await Promise.all([
+    const [hh, members, units, categories] = await Promise.all([
       api("/household"), api("/household/members"), api("/household/units").catch(() => []),
+      api("/household/categories").catch(() => []),
     ]);
     State.members = members; indexMembers();
     State.units = units || [];
+    const customCats = (categories || []).filter(c => !c.builtin);
+    const builtinCats = (categories || []).filter(c => c.builtin);
     const isAdmin = State.user?.role === "admin";
     $("#topbar-actions").innerHTML = "";
     const exportBtn = document.createElement("a");
@@ -1235,6 +1238,26 @@ async function viewSettings() {
       </div>
 
       <div class="card card-pad" style="margin-top:16px">
+        <div class="row between" style="margin-bottom:6px">
+          <h3>🏷️ Categorie merceologiche</h3>
+          <button class="btn btn-primary btn-sm" id="add-category">+ Aggiungi categoria</button>
+        </div>
+        <p class="hint" style="margin-bottom:14px">Le categorie di base coprono la spesa quotidiana. L'assistente può <b>creare nuove categorie</b> quando nessuna è adatta (es. abbigliamento, trasporti, ristorazione); qui le puoi rivedere, modificare o eliminare. Le spese già classificate restano nello storico anche se elimini una categoria.</p>
+        ${customCats.length ? `<div class="table-wrap"><table class="data">
+          <thead><tr><th>Categoria</th><th>Descrizione</th><th>Esempi</th><th>Origine</th><th></th></tr></thead>
+          <tbody>${customCats.map(c => `<tr>
+            <td><b>${esc(c.name)}</b></td>
+            <td class="hint">${esc(c.description || "—")}</td>
+            <td class="hint">${esc((c.examples || []).join(", ") || "—")}</td>
+            <td>${c.source === "agent" ? `<span class="badge b-non_rilevante">assistente</span>` : `<span class="badge b-familiare">manuale</span>`}</td>
+            <td class="num row" style="gap:4px;justify-content:flex-end"><button class="btn-icon" data-edit-cat="${c.id}" title="Modifica">✏️</button><button class="btn-icon" data-del-cat="${c.id}" title="Elimina">🗑️</button></td>
+          </tr>`).join("")}</tbody></table></div>` : `<div class="empty" style="padding:18px"><p class="hint">Nessuna categoria personalizzata: per ora si usano le ${builtinCats.length} categorie di base.</p></div>`}
+        <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">Mostra le ${builtinCats.length} categorie di base</summary>
+          <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${builtinCats.map(c => `<span class="badge b-non_rilevante" title="${esc(c.description || "")}">${esc(c.name)}</span>`).join("")}</div>
+        </details>
+      </div>
+
+      <div class="card card-pad" style="margin-top:16px">
         <h3 style="margin-bottom:6px">🧠 Addestramento assistente</h3>
         <p class="hint" style="margin-bottom:14px">Istruzioni libere che l'assistente seguirà per questo nucleo: convenzioni, come trattare casi ricorrenti, quale unità considerare di default per il condominio, preferenze di classificazione. Vengono aggiunte al suo contesto.</p>
         <textarea class="input" id="agent-instructions" rows="6" placeholder="Es. La nostra unità nel condominio Aurora è l'interno 5, intestata a Mario Rossi. Per le bollette del gas considerare la seconda casa solo se citato 'Via Verdi'." ${isAdmin ? "" : "disabled"}>${esc(hh.agent_instructions || "")}</textarea>
@@ -1254,6 +1277,13 @@ async function viewSettings() {
     c.querySelectorAll("[data-del-unit]").forEach(b => b.addEventListener("click", async () => {
       if (!(await confirmDialog("Eliminare l'unità?", "Le bollette collegate resteranno, ma senza associazione all'unità."))) return;
       try { await api(`/household/units/${b.dataset.delUnit}`, { method: "DELETE" }); toast("Unità eliminata", { type: "ok" }); viewSettings(); }
+      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    }));
+    $("#add-category")?.addEventListener("click", () => openCategoryForm());
+    c.querySelectorAll("[data-edit-cat]").forEach(b => b.addEventListener("click", () => openCategoryForm(customCats.find(x => x.id === b.dataset.editCat))));
+    c.querySelectorAll("[data-del-cat]").forEach(b => b.addEventListener("click", async () => {
+      if (!(await confirmDialog("Eliminare la categoria?", "Le spese già classificate con questo nome restano nello storico. L'assistente non la proporrà più."))) return;
+      try { await api(`/household/categories/${b.dataset.delCat}`, { method: "DELETE" }); toast("Categoria eliminata", { type: "ok" }); viewSettings(); }
       catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
     }));
     $("#save-instructions")?.addEventListener("click", async () => {
@@ -1301,6 +1331,32 @@ function openUnitForm(unit = null) {
       if (unit) await api(`/household/units/${unit.id}`, { method: "PATCH", body });
       else await api("/household/units", { method: "POST", body });
       toast(unit ? "Unità aggiornata" : "Unità aggiunta", { type: "ok" });
+      closeModal(); viewSettings();
+    } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
+  });
+}
+
+function openCategoryForm(category = null) {
+  const cat = category || {};
+  openModal(`
+    <div class="modal-head"><h3>${category ? "Modifica categoria" : "Nuova categoria merceologica"}</h3><button class="btn-icon" data-close>✕</button></div>
+    <form id="category-form">
+      <div class="field"><label>Nome <span class="hint">(breve, minuscolo)</span></label><input class="input" name="name" placeholder="es. abbigliamento" value="${esc(cat.name || "")}" required></div>
+      <div class="field"><label>Descrizione <span class="hint">(cosa include)</span></label><input class="input" name="description" placeholder="es. vestiti e calzature" value="${esc(cat.description || "")}"></div>
+      <div class="field"><label>Esempi <span class="hint">(separati da virgola)</span></label><input class="input" name="examples" placeholder="es. scarpe, giacca, jeans" value="${esc((cat.examples || []).join(", "))}"></div>
+      <p class="hint" style="margin-bottom:16px">Non creare categorie per i medicinali: usa quella di base “farmaci”.</p>
+      <button class="btn btn-primary btn-block" type="submit">${category ? "Salva" : "Crea categoria"}</button>
+    </form>`);
+  $("#modal-root [data-close]").addEventListener("click", closeModal);
+  $("#category-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    const examples = (fd.examples || "").split(",").map(s => s.trim()).filter(Boolean);
+    const body = { name: fd.name, description: fd.description || null, examples: examples.length ? examples : null };
+    try {
+      if (category) await api(`/household/categories/${category.id}`, { method: "PATCH", body });
+      else await api("/household/categories", { method: "POST", body });
+      toast(category ? "Categoria aggiornata" : "Categoria creata", { type: "ok" });
       closeModal(); viewSettings();
     } catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
   });
