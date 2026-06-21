@@ -139,7 +139,7 @@ function confirmDialog(title, message, { danger = true, okText = "Conferma" } = 
 /* ---------- Auth views ---------- */
 function renderAuth(mode = "login") {
   document.documentElement.dataset.theme = State.theme;
-  const tabs = `
+  const tabs = mode === "recover" ? "" : `
     <div class="auth-tabs">
       <button class="${mode === "login" ? "active" : ""}" data-mode="login">Accedi</button>
       <button class="${mode === "register" ? "active" : ""}" data-mode="register">Nuovo nucleo</button>
@@ -151,7 +151,16 @@ function renderAuth(mode = "login") {
     form = `
       <div class="field"><label>Email</label><input class="input" type="email" name="email" autocomplete="email" required></div>
       <div class="field"><label>Password</label><input class="input" type="password" name="password" autocomplete="current-password" required></div>
-      <button class="btn btn-primary btn-block" type="submit">Accedi</button>`;
+      <button class="btn btn-primary btn-block" type="submit">Accedi</button>
+      <p class="hint" style="text-align:center;margin-top:14px"><a href="#" data-mode-link="recover">Password dimenticata?</a></p>`;
+  } else if (mode === "recover") {
+    form = `
+      <p class="hint" style="margin-bottom:14px">Per recuperare la password inserisci l'email e il <b>codice fiscale</b> associato al tuo account, poi scegli una nuova password. Se non hai un codice fiscale impostato, chiedi all'amministratore del nucleo di reimpostartela.</p>
+      <div class="field"><label>Email</label><input class="input" type="email" name="email" autocomplete="email" required></div>
+      <div class="field"><label>Codice fiscale</label><input class="input" name="codice_fiscale" maxlength="16" style="text-transform:uppercase" required></div>
+      <div class="field"><label>Nuova password <span class="hint">(min 8 caratteri)</span></label><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password" required></div>
+      <button class="btn btn-primary btn-block" type="submit">Reimposta password</button>
+      <p class="hint" style="text-align:center;margin-top:14px"><a href="#" data-mode-link="login">← Torna all'accesso</a></p>`;
   } else if (mode === "register") {
     form = `
       <div class="field"><label>Nome del nucleo familiare</label><input class="input" name="household_name" placeholder="es. Famiglia Rossi" required></div>
@@ -182,18 +191,27 @@ function renderAuth(mode = "login") {
 
   $("#app").querySelectorAll(".auth-tabs button").forEach(b =>
     b.addEventListener("click", () => renderAuth(b.dataset.mode)));
+  $("#app").querySelectorAll("[data-mode-link]").forEach(a =>
+    a.addEventListener("click", (e) => { e.preventDefault(); renderAuth(a.dataset.modeLink); }));
+
+  const ENDPOINTS = {
+    login: "/auth/login",
+    register: "/auth/register",
+    join: "/auth/join",
+    recover: "/auth/password-reset",
+  };
 
   $("#auth-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector("button[type=submit]");
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Attendere…";
     const data = Object.fromEntries(new FormData(e.target).entries());
+    if (data.codice_fiscale) data.codice_fiscale = data.codice_fiscale.trim().toUpperCase();
     try {
-      const endpoint = mode === "login" ? "/auth/login" : mode === "register" ? "/auth/register" : "/auth/join";
-      const res = await api(endpoint, { method: "POST", body: data });
+      const res = await api(ENDPOINTS[mode], { method: "POST", body: data });
       State.token = res.access_token;
       localStorage.setItem("token", State.token);
-      toast("Accesso effettuato", { type: "ok" });
+      toast(mode === "recover" ? "Password reimpostata" : "Accesso effettuato", { type: "ok" });
       await boot();
     } catch (err) {
       toast("Operazione non riuscita", { desc: err.message, type: "err" });

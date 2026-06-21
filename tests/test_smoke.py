@@ -29,6 +29,34 @@ def test_member_update_schema_allows_partial():
     assert data == {"codice_fiscale": "RSSMRA80A01H501U"}
 
 
+def test_password_reset_route_registered():
+    """L'endpoint di recupero password self-service deve essere esposto (POST)."""
+    from app.api import auth
+
+    has_reset = any(
+        getattr(r, "path", "") == "/auth/password-reset"
+        and "POST" in getattr(r, "methods", set())
+        for r in auth.router.routes
+    )
+    assert has_reset, "POST /auth/password-reset non registrato"
+
+
+def test_password_reset_schema_requires_min_password():
+    """La nuova password del recupero richiede almeno 8 caratteri."""
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.auth import PasswordResetRequest
+
+    PasswordResetRequest(
+        email="a@b.it", codice_fiscale="RSSMRA80A01H501U", new_password="abcd1234"
+    )
+    with pytest.raises(ValidationError):
+        PasswordResetRequest(
+            email="a@b.it", codice_fiscale="RSSMRA80A01H501U", new_password="short"
+        )
+
+
 def test_async_db_url_coercion():
     from app.config import Settings
 

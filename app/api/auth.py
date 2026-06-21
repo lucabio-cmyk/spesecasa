@@ -5,7 +5,14 @@ from app.deps import DB, CurrentUser
 from app.enums import UserRole
 from app.models.household import Household
 from app.models.user import User
-from app.schemas.auth import JoinRequest, LoginRequest, RegisterRequest, Token, UserOut
+from app.schemas.auth import (
+    JoinRequest,
+    LoginRequest,
+    PasswordResetRequest,
+    RegisterRequest,
+    Token,
+    UserOut,
+)
 from app.services.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -65,6 +72,33 @@ async def login(body: LoginRequest, db: DB):
     user = res.scalars().first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenziali non valide")
+    return Token(access_token=create_access_token(str(user.id)))
+
+
+@router.post("/password-reset", response_model=Token)
+async def password_reset(body: PasswordResetRequest, db: DB):
+    """Recupero password self-service senza email: verifica l'identità con il
+    codice fiscale dell'utente e imposta la nuova password. In caso di successo
+    restituisce un token (accesso immediato).
+
+    Per non rivelare quali email esistano o chi abbia un codice fiscale, ogni
+    fallimento restituisce lo stesso errore generico. Chi non ha un codice
+    fiscale impostato deve chiedere all'amministratore di reimpostare la password
+    (dalla sezione membri)."""
+    generic_error = HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        "Dati non corrispondenti o recupero non disponibile. "
+        "Contatta l'amministratore del nucleo.",
+    )
+    res = await db.execute(select(User).where(User.email == body.email))
+    user = res.scalars().first()
+    submitted_cf = body.codice_fiscale.strip().upper()
+    if not user or not user.codice_fiscale:
+        raise generic_error
+    if user.codice_fiscale.strip().upper() != submitted_cf:
+        raise generic_error
+    user.hashed_password = hash_password(body.new_password)
+    await db.commit()
     return Token(access_token=create_access_token(str(user.id)))
 
 

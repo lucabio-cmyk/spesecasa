@@ -51,6 +51,17 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordResetRequest(BaseModel):
+    """Recupero password self-service. In assenza di un servizio email, l'identità
+    è verificata con un dato personale già noto al nucleo: il codice fiscale.
+    Funziona solo se l'utente ha un codice fiscale impostato; altrimenti deve
+    rivolgersi all'amministratore del nucleo."""
+
+    email: EmailStr
+    codice_fiscale: str
+    new_password: str = Field(min_length=8)
+
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
