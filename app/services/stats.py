@@ -541,7 +541,7 @@ def _compute_insights(
     # 6) Bollette scadute / in arrivo.
     overdue = upcoming_bills.get("overdue", [])
     if overdue:
-        tot = sum(b.get("total_amount", 0) for b in overdue)
+        tot = sum(b.get("total_amount") or 0 for b in overdue)
         out.append({
             "severity": "warning",
             "icon": "⏰",
@@ -553,7 +553,7 @@ def _compute_insights(
             "severity": "info",
             "icon": "📅",
             "title": f"{upcoming_bills['open_count']} bollett{'a' if upcoming_bills['open_count'] == 1 else 'e'} da pagare",
-            "detail": f"Totale aperto: {upcoming_bills.get('open_total', 0):.2f} €.",
+            "detail": f"Totale aperto: {upcoming_bills.get('open_total') or 0:.2f} €.",
         })
 
     if not out:
