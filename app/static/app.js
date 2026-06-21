@@ -53,7 +53,7 @@ const BILL_STATUS_LABELS = {
 const CATEGORIES = [
   "frutta e verdura","carne e pesce","latticini e uova","pane, forno e colazione",
   "pasta, riso e dispensa","bevande","surgelati","infanzia","igiene personale",
-  "pulizia casa","animali","parafarmacia da supermercato","casa e cucina","altre spese supermercato",
+  "pulizia casa","animali","farmaci","parafarmacia da supermercato","casa e cucina","altre spese supermercato",
 ];
 const PALETTE = ["#0d9488","#3b82f6","#f59e0b","#8b5cf6","#ec4899","#22c55e","#ef4444","#06b6d4","#eab308","#6366f1","#14b8a6","#f97316","#a855f7","#64748b"];
 
@@ -257,6 +257,17 @@ const NAV = [
   { id: "settings", icon: "⚙️", label: "Impostazioni" },
 ];
 
+// La sezione "Farmaci" (dati sanitari sensibili) è riservata agli admin e
+// compare nel menu solo per loro.
+function navItems() {
+  const items = [...NAV];
+  if (State.user?.role === "admin") {
+    const i = items.findIndex(n => n.id === "expenses");
+    items.splice(i + 1, 0, { id: "farmaci", icon: "💊", label: "Farmaci" });
+  }
+  return items;
+}
+
 function renderShell() {
   document.documentElement.dataset.theme = State.theme;
   const reviewCount = State._reviewCount || 0;
@@ -264,7 +275,7 @@ function renderShell() {
     <div class="shell">
       <aside class="sidebar" id="sidebar">
         <div class="brand"><span class="logo">🧾</span><div><b>Spese Familiari</b><small>${esc(State.user?.household_name || "Archivio fiscale")}</small></div></div>
-        ${NAV.map(n => `
+        ${navItems().map(n => `
           <button class="nav-item ${State.view === n.id ? "active" : ""}" data-nav="${n.id}">
             <span class="ico">${n.icon}</span><span>${n.label}</span>
             ${n.id === "documents" && reviewCount ? `<span class="badge-dot">${reviewCount}</span>` : ""}
@@ -310,14 +321,17 @@ function navigate(view) {
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
+    farmaci: ["Farmaci", "Catalogo dei medicinali acquistati · riservato all'amministratore"],
     bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
     settings: ["Impostazioni", "Nucleo, membri, immobili e addestramento dell'assistente"],
   };
+  // Difesa: la vista farmaci è solo per admin (il menu non la mostra agli altri).
+  if (view === "farmaci" && State.user?.role !== "admin") view = State.view = "dashboard";
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, upload: viewUpload, documents: viewDocuments, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -785,6 +799,50 @@ async function loadExpenses() {
       });
     });
   } catch (err) { wrap.innerHTML = errorBox(err.message); }
+}
+
+/* ---------- View: Farmaci (riservata admin) ----------
+   Catalogo dei medicinali acquistati: categoria "farmaci". Mostra i dati del
+   farmaco riconosciuti dallo scontrino parlante e arricchiti dalla ricerca
+   online del codice AIC/minsan (salvati in details dall'assistente). */
+const dget = (d, keys) => { if (!d || typeof d !== "object") return ""; for (const k of keys) { if (d[k] != null && d[k] !== "") return String(d[k]); } return ""; };
+
+async function viewFarmaci() {
+  if (State.user?.role !== "admin") { navigate("dashboard"); return; }
+  const c = $("#content");
+  c.innerHTML = skeletonRows();
+  $("#topbar-actions").appendChild(await yearSelector(viewFarmaci));
+  const privacy = `<div class="card card-pad" style="border-left:4px solid var(--teal-600, #0d9488);display:flex;gap:12px;align-items:center;margin-bottom:16px">
+      <span style="font-size:22px">🔒</span>
+      <div><b>Sezione riservata</b><div class="sub" style="color:var(--text-soft);font-size:13px">I farmaci sono dati sanitari sensibili: visibili solo agli amministratori del nucleo. Il codice AIC/minsan dello scontrino parlante viene cercato online dall'assistente per identificare il medicinale.</div></div>
+    </div>`;
+  try {
+    const rows = await api(`/expenses/farmaci${State.year ? `?fiscal_year=${State.year}` : ""}`);
+    if (!rows.length) {
+      c.innerHTML = privacy + emptyBox("💊", "Nessun farmaco registrato", "Carica lo scontrino della farmacia (scontrino parlante) o registra la spesa: l'assistente riconosce i medicinali, ne cerca il codice online e li classifica come “farmaci”.", "Carica documento", "upload");
+      bindEmpty(c); return;
+    }
+    const total = rows.reduce((s, r) => s + Number(r.line_amount || 0), 0);
+    c.innerHTML = privacy + `
+      <div class="row between" style="margin-bottom:12px"><span class="hint">${rows.length} acquist${rows.length === 1 ? "o" : "i"} di medicinali</span><b>Totale: ${eur(total)}</b></div>
+      <div class="card table-wrap"><table class="data">
+        <thead><tr><th>Data</th><th>Farmaco</th><th>Principio attivo</th><th>Codice (AIC/MINSAN)</th><th>Beneficiario</th><th>Fiscale</th><th class="num">Importo</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const d = r.details || {};
+          const farmaco = dget(d, ["farmaco", "nome_commerciale", "nome"]) || r.description_normalized || r.description_original || "—";
+          const pa = dget(d, ["principio_attivo", "atc"]);
+          const code = dget(d, ["codice_aic", "aic"]) || dget(d, ["minsan", "codice_ministeriale"]);
+          return `<tr>
+            <td class="mono">${fmtDate(r.purchase_date)}</td>
+            <td><b>${esc(farmaco)}</b>${r.merchant ? `<div class="hint">${esc(r.merchant)}</div>` : ""}</td>
+            <td>${esc(pa || "—")}</td>
+            <td class="mono">${esc(code || "—")}</td>
+            <td>${esc(memberName(r.beneficiary_user_id))}</td>
+            <td>${badge(r.fiscal_classification, FISCAL_LABELS)}</td>
+            <td class="num">${eur(r.line_amount)}</td>
+          </tr>`;
+        }).join("")}</tbody></table></div>`;
+  } catch (err) { c.innerHTML = privacy + errorBox(err.message); }
 }
 
 /* ---------- View: Casa & Bollette ---------- */

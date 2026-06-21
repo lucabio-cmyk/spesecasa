@@ -1,14 +1,21 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.deps import DB, CurrentUser
-from app.enums import ExpenseScope, FiscalClassification
+from app.deps import DB, AdminUser, CurrentUser
+from app.enums import (
+    SENSITIVE_CATEGORIES,
+    ExpenseScope,
+    FiscalClassification,
+    UserRole,
+)
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
 
 router = APIRouter(prefix="/expenses", tags=["expenses"])
+
+_SENSITIVE = list(SENSITIVE_CATEGORIES)
 
 
 @router.get("", response_model=list[ExpenseOut])
@@ -36,6 +43,38 @@ async def list_expenses(
         stmt = stmt.where(Expense.fiscal_classification == fiscal_classification)
     if payer_user_id:
         stmt = stmt.where(Expense.payer_user_id == payer_user_id)
+    # I farmaci sono dati sanitari sensibili: il loro dettaglio è riservato agli
+    # amministratori. Per gli altri membri nascondiamo queste righe (coalesce
+    # per non escludere anche le righe senza categoria, che hanno valore NULL).
+    if user.role != UserRole.ADMIN:
+        stmt = stmt.where(func.coalesce(Expense.merch_category, "").notin_(_SENSITIVE))
+    res = await db.execute(stmt)
+    return list(res.scalars())
+
+
+@router.get("/farmaci", response_model=list[ExpenseOut])
+async def list_farmaci(
+    user: AdminUser,
+    db: DB,
+    fiscal_year: int | None = None,
+    beneficiary_user_id: uuid.UUID | None = None,
+):
+    """Catalogo dei FARMACI acquistati dal nucleo (categoria 'farmaci'),
+    riservato agli amministratori: dato sanitario sensibile. Ogni riga porta in
+    'details' i dati del farmaco riconosciuti dallo scontrino parlante e dalla
+    ricerca online del codice (AIC/minsan): nome, principio attivo, ATC."""
+    stmt = (
+        select(Expense)
+        .where(
+            Expense.household_id == user.household_id,
+            Expense.merch_category.in_(_SENSITIVE),
+        )
+        .order_by(Expense.purchase_date.desc().nullslast())
+    )
+    if fiscal_year:
+        stmt = stmt.where(Expense.fiscal_year == fiscal_year)
+    if beneficiary_user_id:
+        stmt = stmt.where(Expense.beneficiary_user_id == beneficiary_user_id)
     res = await db.execute(stmt)
     return list(res.scalars())
 

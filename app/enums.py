@@ -78,10 +78,19 @@ MERCHANDISE_CATEGORIES: list[str] = [
     "igiene personale",
     "pulizia casa",
     "animali",
+    "farmaci",
     "parafarmacia da supermercato",
     "casa e cucina",
     "altre spese supermercato",
 ]
+
+# Categorie merceologiche che contengono dati sanitari sensibili: i FARMACI
+# (es. dallo "scontrino parlante" della farmacia, con codice AIC/minsan) sono
+# dati relativi alla salute. La visualizzazione di DETTAGLIO di queste spese è
+# riservata agli amministratori del nucleo; per i non-amministratori le righe e
+# gli aggregati di queste categorie vengono nascosti. Distinta da
+# "parafarmacia da supermercato", che raccoglie articoli non-medicinali.
+SENSITIVE_CATEGORIES: frozenset[str] = frozenset({"farmaci"})
 
 # Unità di misura tipica del consumo per tipo di utenza (per i costi unitari,
 # es. €/kWh, €/Smc). Indicativa: l'unità reale resta letta dalla bolletta.

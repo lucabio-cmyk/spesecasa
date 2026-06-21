@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.enums import UserRole
 from app.models.user import User
 
 _bearer = HTTPBearer()
@@ -34,6 +35,20 @@ async def get_current_user(
     return user
 
 
+async def require_admin(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Consente l'accesso solo agli amministratori del nucleo. Usato per le
+    sezioni che mostrano dati sensibili (es. il dettaglio dei farmaci)."""
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Operazione riservata all'amministratore del nucleo",
+        )
+    return user
+
+
 # Alias riutilizzabili nelle route
 CurrentUser = Annotated[User, Depends(get_current_user)]
+AdminUser = Annotated[User, Depends(require_admin)]
 DB = Annotated[AsyncSession, Depends(get_db)]
