@@ -33,8 +33,15 @@ class ExpenseCreate(ExpenseBase):
 
 
 class ExpenseUpdate(BaseModel):
-    merch_category: str | None = None
+    purchase_date: date | None = None
+    merchant: str | None = None
+    description_original: str | None = None
     description_normalized: str | None = None
+    merch_category: str | None = None
+    quantity: Decimal | None = None
+    unit_price: Decimal | None = None
+    line_amount: Decimal | None = None
+    discount: Decimal | None = None
     fiscal_classification: FiscalClassification | None = None
     scope: ExpenseScope | None = None
     payer_user_id: uuid.UUID | None = None

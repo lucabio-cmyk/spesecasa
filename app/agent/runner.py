@@ -191,9 +191,16 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
     return final_text.strip()
 
 
-async def process_document(db: AsyncSession, document: Document) -> None:
+async def process_document(
+    db: AsyncSession, document: Document, extra_instruction: str | None = None
+) -> None:
     """Pipeline: legge il file, lo passa al modello (vision/PDF) con i tool,
-    il modello estrae/classifica/attribuisce e persiste, poi salva la sintesi."""
+    il modello estrae/classifica/attribuisce e persiste, poi salva la sintesi.
+
+    `extra_instruction` (opzionale) sono indicazioni libere dell'utente per
+    questa specifica (ri)elaborazione: vengono aggiunte all'istruzione di base
+    con priorità, es. "questa è una bolletta del gas della seconda casa" oppure
+    "attribuisci tutto a Mario e ignora la riga del sacchetto"."""
     document.status = DocumentStatus.PROCESSING
     await db.commit()
     try:
@@ -222,6 +229,12 @@ async def process_document(db: AsyncSession, document: Document) -> None:
             "consumo e costo; 6) concludi con una sintesi pratica in italiano. Non inventare "
             "dati assenti né soglie o percentuali; lascia vuoti i campi non leggibili."
         )
+        if extra_instruction and extra_instruction.strip():
+            instruction += (
+                "\n\nISTRUZIONI AGGIUNTIVE DELL'UTENTE PER QUESTA RIELABORAZIONE "
+                "(prioritarie: seguile con attenzione anche quando correggono o "
+                "precisano quanto sopra):\n" + extra_instruction.strip()
+            )
         messages = [
             {"role": "user", "content": [file_to_content_block(document.mime_type, data), {"type": "text", "text": instruction}]}
         ]

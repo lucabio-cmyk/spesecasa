@@ -287,6 +287,10 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .kv { display: grid; grid-template-columns: 130px 1fr; gap: 8px 14px; font-size: 14px; }
 .kv dt { color: var(--text-faint); font-weight: 600; }
 .kv dd { margin: 0; }
+.kv-edit { align-items: center; gap: 10px 14px; }
+.kv-edit dt { align-self: center; }
+.kv-edit .input, .kv-edit .select { padding: 7px 9px; font-size: 13px; }
+table.data .input, table.data .inline-select { padding: 6px 8px; font-size: 13px; }
 .preview-frame { width: 100%; height: 420px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 .preview-img { max-width: 100%; border-radius: 10px; border: 1px solid var(--border); }
 

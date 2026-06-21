@@ -53,6 +53,29 @@ async def resolve_member_id(
     return None
 
 
+async def member_belongs_to_household(
+    db: AsyncSession, household_id: uuid.UUID, user_id
+) -> bool:
+    """True se l'utente indicato appartiene al nucleo (o se è None: nessun
+    vincolo). Usato per validare payer/beneficiary nelle correzioni manuali ed
+    evitare di attribuire dati a soggetti di un altro nucleo (cross-tenant)."""
+    if user_id is None:
+        return True
+    member = await db.get(User, user_id)
+    return bool(member and member.household_id == household_id)
+
+
+async def payment_method_belongs_to_household(
+    db: AsyncSession, household_id: uuid.UUID, payment_method_id
+) -> bool:
+    """True se il metodo di pagamento indicato appartiene al nucleo (o se è
+    None: nessun vincolo). Valida payment_method_id nelle correzioni manuali."""
+    if payment_method_id is None:
+        return True
+    pm = await db.get(PaymentMethod, payment_method_id)
+    return bool(pm and pm.household_id == household_id)
+
+
 async def resolve_unit_id(
     db: AsyncSession, household_id: uuid.UUID, name_or_id
 ) -> uuid.UUID | None:
