@@ -34,6 +34,18 @@ class MemberInvite(BaseModel):
     codice_fiscale: str | None = None
 
 
+class MemberUpdate(BaseModel):
+    """Modifica i dati di un membro dopo la creazione (es. aggiunta del
+    codice fiscale). Tutti i campi sono opzionali: si aggiorna solo ciò che
+    viene inviato."""
+
+    email: EmailStr | None = None
+    full_name: str | None = None
+    codice_fiscale: str | None = None
+    role: UserRole | None = None
+    password: str | None = Field(default=None, min_length=8)
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
