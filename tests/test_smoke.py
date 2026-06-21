@@ -8,6 +8,27 @@ def test_import_app():
     assert app is not None
 
 
+def test_member_update_route_registered():
+    """L'endpoint di modifica membro post-creazione deve essere esposto (PATCH)."""
+    from app.api import household
+
+    patch_member = any(
+        getattr(r, "path", "") == "/household/members/{member_id}"
+        and "PATCH" in getattr(r, "methods", set())
+        for r in household.router.routes
+    )
+    assert patch_member, "PATCH /household/members/{member_id} non registrato"
+
+
+def test_member_update_schema_allows_partial():
+    """MemberUpdate consente l'aggiunta del solo codice fiscale dopo la creazione."""
+    from app.schemas.auth import MemberUpdate
+
+    body = MemberUpdate(codice_fiscale="RSSMRA80A01H501U")
+    data = body.model_dump(exclude_unset=True)
+    assert data == {"codice_fiscale": "RSSMRA80A01H501U"}
+
+
 def test_async_db_url_coercion():
     from app.config import Settings
 

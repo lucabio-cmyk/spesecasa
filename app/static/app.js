@@ -1022,12 +1022,12 @@ async function viewSettings() {
         </div>
         <div class="card card-pad">
           <div class="row between" style="margin-bottom:14px"><h3>Membri</h3>${isAdmin ? `<button class="btn btn-primary btn-sm" id="add-member">+ Aggiungi</button>` : ""}</div>
-          <div class="table-wrap"><table class="data"><thead><tr><th>Nome</th><th>Ruolo</th><th>Cod. fiscale</th>${isAdmin ? "<th></th>" : ""}</tr></thead>
+          <div class="table-wrap"><table class="data"><thead><tr><th>Nome</th><th>Ruolo</th><th>Cod. fiscale</th><th></th></tr></thead>
           <tbody>${members.map(m => `<tr>
             <td><div class="row" style="gap:9px"><span class="avatar" style="width:28px;height:28px;font-size:11px">${initials(m.full_name)}</span><div><b>${esc(m.full_name)}</b><div class="hint">${esc(m.email)}</div></div></div></td>
             <td>${m.role === "admin" ? `<span class="badge b-familiare">Admin</span>` : `<span class="badge b-non_rilevante">Membro</span>`}</td>
             <td class="mono">${esc(m.codice_fiscale || "—")}</td>
-            ${isAdmin ? `<td class="num">${m.id === State.user.id ? `<span class="hint">tu</span>` : `<button class="btn-icon" data-rm="${m.id}" title="Rimuovi">🗑️</button>`}</td>` : ""}
+            <td class="num row" style="gap:4px;justify-content:flex-end">${(isAdmin || m.id === State.user.id) ? `<button class="btn-icon" data-edit-member="${m.id}" title="Modifica">✏️</button>` : ""}${isAdmin && m.id !== State.user.id ? `<button class="btn-icon" data-rm="${m.id}" title="Rimuovi">🗑️</button>` : ""}${m.id === State.user.id ? `<span class="hint">tu</span>` : ""}</td>
           </tr>`).join("")}</tbody></table></div>
         </div>
       </div>
@@ -1058,6 +1058,7 @@ async function viewSettings() {
 
     $("#copy-id")?.addEventListener("click", () => { navigator.clipboard.writeText(hh.id); toast("ID copiato", { type: "ok", timeout: 1500 }); });
     $("#add-member")?.addEventListener("click", addMemberDialog);
+    c.querySelectorAll("[data-edit-member]").forEach(b => b.addEventListener("click", () => editMemberDialog(members.find(m => m.id === b.dataset.editMember), isAdmin)));
     c.querySelectorAll("[data-rm]").forEach(b => b.addEventListener("click", async () => {
       if (!(await confirmDialog("Rimuovere il membro?", "Perderà l'accesso al nucleo. Le spese già attribuite restano nello storico."))) return;
       try { await api(`/household/members/${b.dataset.rm}`, { method: "DELETE" }); toast("Membro rimosso", { type: "ok" }); viewSettings(); }
@@ -1136,6 +1137,36 @@ function addMemberDialog() {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
     try { await api("/household/members", { method: "POST", body: data }); toast("Membro aggiunto", { type: "ok" }); closeModal(); viewSettings(); }
+    catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
+  });
+}
+
+function editMemberDialog(member, isAdmin) {
+  if (!member) return;
+  const isSelf = member.id === State.user.id;
+  openModal(`
+    <div class="modal-head"><h3>Modifica membro</h3><button class="btn-icon" data-close>✕</button></div>
+    <form id="member-edit-form">
+      <div class="field"><label>Nome completo</label><input class="input" name="full_name" value="${esc(member.full_name || "")}" required></div>
+      <div class="field"><label>Email</label><input class="input" type="email" name="email" value="${esc(member.email || "")}" required></div>
+      <div class="field"><label>Codice fiscale <span class="hint">(opzionale)</span></label><input class="input" name="codice_fiscale" maxlength="16" style="text-transform:uppercase" value="${esc(member.codice_fiscale || "")}"></div>
+      ${isAdmin ? `<div class="field"><label>Ruolo</label><select class="select" name="role">${optList({ member: "Membro", admin: "Admin" }, member.role)}</select></div>` : ""}
+      <div class="field"><label>Nuova password <span class="hint">(lascia vuoto per non cambiarla, min 8)</span></label><input class="input" type="password" name="password" minlength="8" autocomplete="new-password"></div>
+      <button class="btn btn-primary btn-block" type="submit">Salva modifiche</button>
+    </form>`);
+  $("#modal-root [data-close]").addEventListener("click", closeModal);
+  $("#member-edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(e.target).entries());
+    if (!data.password) delete data.password;
+    data.codice_fiscale = (data.codice_fiscale || "").trim().toUpperCase() || null;
+    try {
+      await api(`/household/members/${member.id}`, { method: "PATCH", body: data });
+      toast("Membro aggiornato", { type: "ok" });
+      closeModal();
+      if (isSelf) { State.user = await api("/auth/me").catch(() => State.user); }
+      viewSettings();
+    }
     catch (err) { toast("Errore", { desc: err.message, type: "err" }); }
   });
 }
