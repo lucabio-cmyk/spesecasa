@@ -5,14 +5,20 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.database import SessionLocal
 from app.deps import DB, CurrentUser
 from app.enums import DocumentStatus, DocumentType
 from app.models.document import Document
 from app.models.expense import Expense
-from app.schemas.document import DocumentOut, DocumentSearchHit, DocumentUpdate
+from app.models.bill import Bill
+from app.schemas.document import (
+    DocumentOut,
+    DocumentSearchHit,
+    DocumentUpdate,
+    ReprocessRequest,
+)
 from app.schemas.expense import ExpenseOut
 from app.services import search as search_service
 from app.services.spreadsheets import normalize_mime
@@ -21,7 +27,9 @@ from app.services.storage import file_hash, get_storage
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-async def _process(document_id: uuid.UUID) -> None:
+async def _process(
+    document_id: uuid.UUID, extra_instruction: str | None = None
+) -> None:
     # Import locale per evitare l'inizializzazione del client Anthropic all'avvio.
     from app.agent.runner import process_document
     from app.config import settings as _settings
@@ -31,7 +39,7 @@ async def _process(document_id: uuid.UUID) -> None:
         doc = await db.get(Document, document_id)
         if doc:
             household_id = doc.household_id
-            await process_document(db, doc)
+            await process_document(db, doc, extra_instruction=extra_instruction)
 
     # A elaborazione conclusa, l'agente di orchestrazione verifica il documento
     # (righe ↔ totale, classificazione, attribuzione) e segnala ciò che non è
@@ -209,13 +217,28 @@ async def document_expenses(document_id: uuid.UUID, user: CurrentUser, db: DB):
 
 
 @router.post("/{document_id}/reprocess", response_model=DocumentOut)
-async def reprocess(document_id: uuid.UUID, user: CurrentUser, db: DB, bg: BackgroundTasks):
+async def reprocess(
+    document_id: uuid.UUID,
+    user: CurrentUser,
+    db: DB,
+    bg: BackgroundTasks,
+    body: ReprocessRequest | None = None,
+):
+    """Rielabora un documento. Accetta istruzioni libere opzionali
+    (`instruction`) che guidano l'agente in questa elaborazione. Le righe e le
+    bollette già estratte dal documento vengono rimosse prima della
+    rielaborazione, così l'estrazione riparte pulita senza duplicati."""
     doc = await db.get(Document, document_id)
     if not doc or doc.household_id != user.household_id:
         raise HTTPException(404, "Documento non trovato")
+    # Pulizia dei dati derivati dal documento per evitare duplicati: l'agente
+    # ri-estrae da capo righe e bollette.
+    await db.execute(delete(Expense).where(Expense.document_id == doc.id))
+    await db.execute(delete(Bill).where(Bill.document_id == doc.id))
     doc.status = DocumentStatus.PENDING
     await db.commit()
-    bg.add_task(_process, doc.id)
+    instruction = body.instruction if body else None
+    bg.add_task(_process, doc.id, instruction)
     await db.refresh(doc)
     return doc
 

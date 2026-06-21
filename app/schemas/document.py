@@ -72,6 +72,14 @@ class DocumentUpdate(BaseModel):
     retention_note: str | None = None
 
 
+class ReprocessRequest(BaseModel):
+    """Indicazioni libere dell'utente per la rielaborazione di un documento
+    (es. "è una bolletta del gas della seconda casa", "attribuisci tutto a
+    Mario"). Opzionali: senza istruzioni la rielaborazione usa il flusso base."""
+
+    instruction: str | None = None
+
+
 class DocumentSearchHit(DocumentOut):
     """Documento trovato dalla ricerca dell'archivio, con punteggio di
     similarità (0..1) presente solo per i risultati semantici."""

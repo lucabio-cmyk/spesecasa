@@ -136,6 +136,27 @@ function confirmDialog(title, message, { danger = true, okText = "Conferma" } = 
   });
 }
 
+// Dialog con area di testo libera (es. istruzioni per la rielaborazione).
+// Risolve con la stringa inserita (anche vuota) o null se si annulla.
+function promptDialog(title, message, { placeholder = "", okText = "Conferma", value = "" } = {}) {
+  return new Promise((resolve) => {
+    openModal(`
+      <div class="modal-head"><h3>${esc(title)}</h3></div>
+      ${message ? `<p style="color:var(--text-soft);margin-bottom:14px">${esc(message)}</p>` : ""}
+      <textarea class="input" id="prompt-text" rows="4" placeholder="${esc(placeholder)}" style="margin-bottom:22px">${esc(value)}</textarea>
+      <div class="row between">
+        <button class="btn btn-ghost" data-act="cancel">Annulla</button>
+        <button class="btn btn-primary" data-act="ok">${esc(okText)}</button>
+      </div>`);
+    const ta = $("#prompt-text"); if (ta) ta.focus();
+    $("#modal-root").addEventListener("click", (e) => {
+      const act = e.target.dataset.act;
+      if (act === "ok") { const v = ta ? ta.value : ""; closeModal(); resolve(v); }
+      else if (act === "cancel") { closeModal(); resolve(null); }
+    });
+  });
+}
+
 /* ---------- Auth views ---------- */
 function renderAuth(mode = "login") {
   document.documentElement.dataset.theme = State.theme;
@@ -830,8 +851,17 @@ async function openDocument(id) {
     });
     body.querySelector("[data-close]").addEventListener("click", closeModal);
     body.querySelector("[data-reprocess]").addEventListener("click", async () => {
-      try { await api(`/documents/${id}/reprocess`, { method: "POST" }); toast("Rielaborazione avviata", { type: "warn" }); closeModal(); loadDocuments(); }
-      catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+      const instruction = await promptDialog(
+        "Rielabora documento",
+        "Aggiungi indicazioni per l'assistente (facoltativo). Le righe già estratte verranno rifatte da capo.",
+        { placeholder: "Es. È una bolletta del gas della seconda casa; attribuisci tutto a Mario e ignora la riga del sacchetto.", okText: "Rielabora" }
+      );
+      if (instruction === null) return;  // annullato
+      try {
+        await api(`/documents/${id}/reprocess`, { method: "POST", body: { instruction: instruction.trim() || null } });
+        toast("Rielaborazione avviata", { type: "warn" });
+        closeModal(); loadDocuments();
+      } catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
     });
     body.querySelector("[data-delete]").addEventListener("click", async () => {
       if (!(await confirmDialog("Eliminare il documento?", "Verranno rimossi anche le righe collegate e il file originale. L'operazione non è reversibile."))) return;
