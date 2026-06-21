@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 from app.enums import UserRole
 
@@ -52,14 +52,25 @@ class LoginRequest(BaseModel):
 
 
 class PasswordResetRequest(BaseModel):
-    """Recupero password self-service. In assenza di un servizio email, l'identità
-    è verificata con un dato personale già noto al nucleo: il codice fiscale.
-    Funziona solo se l'utente ha un codice fiscale impostato; altrimenti deve
-    rivolgersi all'amministratore del nucleo."""
+    """Recupero password self-service via GUI, senza servizio email. L'identità è
+    verificata in alternativa con:
+    - il codice fiscale dell'utente (se impostato), oppure
+    - il codice di recupero del deploy (`ADMIN_RECOVERY_KEY`), utile quando
+      l'amministratore è chiuso fuori e non ha un codice fiscale.
+    Va fornito almeno uno dei due."""
 
     email: EmailStr
-    codice_fiscale: str
     new_password: str = Field(min_length=8)
+    codice_fiscale: str | None = None
+    recovery_key: str | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_factor(self) -> "PasswordResetRequest":
+        if not (self.codice_fiscale or self.recovery_key):
+            raise ValueError(
+                "Fornisci il codice fiscale oppure il codice di recupero"
+            )
+        return self
 
 
 class Token(BaseModel):

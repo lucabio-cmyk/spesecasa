@@ -92,18 +92,24 @@ Docs interattive: http://localhost:8000/docs
 5. Lo start command esegue `alembic upgrade head` e poi avvia Uvicorn.
 
 ## Recupero password
-- **Self-service (GUI):** dalla schermata di accesso usa "Password dimenticata?"
-  e inserisci email + **codice fiscale** associato all'account per impostarne una
-  nuova. Funziona solo se hai un codice fiscale impostato.
-- **Da amministratore:** l'admin può reimpostare la password di qualsiasi membro
-  dalla modifica del membro (Impostazioni → Membri → ✏️).
-- **Emergenza / admin chiuso fuori (senza codice fiscale):** reset diretto sul
-  database con lo script di gestione (richiede `DATABASE_URL` configurato; su
-  Railway esegui in una shell del servizio app, es. `railway run`):
+Dalla schermata di accesso usa **"Password dimenticata?"**: inserisci l'email,
+scegli un metodo di verifica e imposta la nuova password (al termine accedi
+subito).
 
-  ```bash
-  python -m scripts.reset_password --list                      # trova l'email
-  python -m scripts.reset_password admin@esempio.it 'NuovaPassword'
-  ```
+- **Codice fiscale dell'account:** se hai un codice fiscale impostato.
+- **Codice di recupero (amministratore):** se sei chiuso fuori e **non** hai un
+  codice fiscale. Imposta nel deploy la variabile `ADMIN_RECOVERY_KEY` con un
+  valore lungo e segreto (su Railway: Variabili del servizio app → redeploy),
+  poi inseriscila come "Codice di recupero". Vuota = metodo disattivato.
+- **Da amministratore (per altri membri):** l'admin può reimpostare la password
+  di qualsiasi membro dalla modifica del membro (Impostazioni → Membri → ✏️).
+
+In alternativa, reset da CLI direttamente sul database (richiede `DATABASE_URL`;
+su Railway esegui in una shell del servizio app, es. `railway run`):
+
+```bash
+python -m scripts.reset_password --list                      # trova l'email
+python -m scripts.reset_password admin@esempio.it 'NuovaPassword'
+```
 
 Vedi `CLAUDE.md` per il brief di sviluppo e il backlog.

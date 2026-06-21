@@ -1,6 +1,9 @@
+import hmac
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
+from app.config import settings
 from app.deps import DB, CurrentUser
 from app.enums import UserRole
 from app.models.household import Household
@@ -77,14 +80,13 @@ async def login(body: LoginRequest, db: DB):
 
 @router.post("/password-reset", response_model=Token)
 async def password_reset(body: PasswordResetRequest, db: DB):
-    """Recupero password self-service senza email: verifica l'identità con il
-    codice fiscale dell'utente e imposta la nuova password. In caso di successo
-    restituisce un token (accesso immediato).
+    """Recupero password self-service via GUI, senza email. Verifica l'identità,
+    in alternativa, con il codice fiscale dell'utente o con il codice di recupero
+    del deploy (`ADMIN_RECOVERY_KEY`), poi imposta la nuova password e restituisce
+    un token (accesso immediato).
 
-    Per non rivelare quali email esistano o chi abbia un codice fiscale, ogni
-    fallimento restituisce lo stesso errore generico. Chi non ha un codice
-    fiscale impostato deve chiedere all'amministratore di reimpostare la password
-    (dalla sezione membri)."""
+    Per non rivelare quali email/codici fiscali esistano, ogni fallimento
+    restituisce lo stesso errore generico."""
     generic_error = HTTPException(
         status.HTTP_400_BAD_REQUEST,
         "Dati non corrispondenti o recupero non disponibile. "
@@ -92,11 +94,24 @@ async def password_reset(body: PasswordResetRequest, db: DB):
     )
     res = await db.execute(select(User).where(User.email == body.email))
     user = res.scalars().first()
-    submitted_cf = body.codice_fiscale.strip().upper()
-    if not user or not user.codice_fiscale:
+    if not user:
         raise generic_error
-    if user.codice_fiscale.strip().upper() != submitted_cf:
+
+    verified = False
+    # Fattore 1: codice di recupero del deploy (attivo solo se configurato).
+    if body.recovery_key and settings.admin_recovery_key:
+        if hmac.compare_digest(body.recovery_key, settings.admin_recovery_key):
+            verified = True
+    # Fattore 2: codice fiscale dell'utente (se impostato).
+    if not verified and body.codice_fiscale and user.codice_fiscale:
+        if hmac.compare_digest(
+            body.codice_fiscale.strip().upper(), user.codice_fiscale.strip().upper()
+        ):
+            verified = True
+
+    if not verified:
         raise generic_error
+
     user.hashed_password = hash_password(body.new_password)
     await db.commit()
     return Token(access_token=create_access_token(str(user.id)))

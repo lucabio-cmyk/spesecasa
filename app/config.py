@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     jwt_secret: str = "cambia-questa-stringa"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
+    # Codice di recupero per reimpostare via GUI la password di un account (utile
+    # se l'admin è chiuso fuori e non ha un codice fiscale). Vuoto = funzione
+    # disattivata. Impostalo come variabile d'ambiente del deploy.
+    admin_recovery_key: str = ""
 
     # Storage
     storage_backend: str = "local"

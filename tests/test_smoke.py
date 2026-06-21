@@ -57,6 +57,28 @@ def test_password_reset_schema_requires_min_password():
         )
 
 
+def test_password_reset_schema_accepts_recovery_key():
+    """Il recupero accetta in alternativa il codice di recupero del deploy."""
+    body = __import__(
+        "app.schemas.auth", fromlist=["PasswordResetRequest"]
+    ).PasswordResetRequest(
+        email="a@b.it", recovery_key="super-secret", new_password="abcd1234"
+    )
+    assert body.recovery_key == "super-secret"
+    assert body.codice_fiscale is None
+
+
+def test_password_reset_schema_requires_a_factor():
+    """Senza codice fiscale né codice di recupero la richiesta è invalida."""
+    import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.auth import PasswordResetRequest
+
+    with pytest.raises(ValidationError):
+        PasswordResetRequest(email="a@b.it", new_password="abcd1234")
+
+
 def test_async_db_url_coercion():
     from app.config import Settings
 

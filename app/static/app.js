@@ -155,9 +155,16 @@ function renderAuth(mode = "login") {
       <p class="hint" style="text-align:center;margin-top:14px"><a href="#" data-mode-link="recover">Password dimenticata?</a></p>`;
   } else if (mode === "recover") {
     form = `
-      <p class="hint" style="margin-bottom:14px">Per recuperare la password inserisci l'email e il <b>codice fiscale</b> associato al tuo account, poi scegli una nuova password. Se non hai un codice fiscale impostato, chiedi all'amministratore del nucleo di reimpostartela.</p>
+      <p class="hint" style="margin-bottom:14px">Inserisci l'email del tuo account e verifica la tua identità, poi scegli una nuova password.</p>
       <div class="field"><label>Email</label><input class="input" type="email" name="email" autocomplete="email" required></div>
-      <div class="field"><label>Codice fiscale</label><input class="input" name="codice_fiscale" maxlength="16" style="text-transform:uppercase" required></div>
+      <div class="field"><label>Metodo di verifica</label>
+        <select class="select" id="recover-method">
+          <option value="codice_fiscale">Codice fiscale dell'account</option>
+          <option value="recovery_key">Codice di recupero (amministratore)</option>
+        </select>
+      </div>
+      <div class="field" data-recover-field="codice_fiscale"><label>Codice fiscale</label><input class="input" name="codice_fiscale" maxlength="16" style="text-transform:uppercase"></div>
+      <div class="field" data-recover-field="recovery_key" hidden><label>Codice di recupero</label><input class="input" name="recovery_key" autocomplete="off"><span class="hint">Il valore di <code>ADMIN_RECOVERY_KEY</code> configurato nel deploy. Usalo se sei l'amministratore e non hai un codice fiscale.</span></div>
       <div class="field"><label>Nuova password <span class="hint">(min 8 caratteri)</span></label><input class="input" type="password" name="new_password" minlength="8" autocomplete="new-password" required></div>
       <button class="btn btn-primary btn-block" type="submit">Reimposta password</button>
       <p class="hint" style="text-align:center;margin-top:14px"><a href="#" data-mode-link="login">← Torna all'accesso</a></p>`;
@@ -194,6 +201,20 @@ function renderAuth(mode = "login") {
   $("#app").querySelectorAll("[data-mode-link]").forEach(a =>
     a.addEventListener("click", (e) => { e.preventDefault(); renderAuth(a.dataset.modeLink); }));
 
+  const recoverMethod = $("#recover-method");
+  if (recoverMethod) {
+    const syncRecoverFields = () => {
+      $("#app").querySelectorAll("[data-recover-field]").forEach(f => {
+        const active = f.dataset.recoverField === recoverMethod.value;
+        f.hidden = !active;
+        const input = f.querySelector("input");
+        if (input) { input.disabled = !active; if (!active) input.value = ""; }
+      });
+    };
+    recoverMethod.addEventListener("change", syncRecoverFields);
+    syncRecoverFields();
+  }
+
   const ENDPOINTS = {
     login: "/auth/login",
     register: "/auth/register",
@@ -207,6 +228,11 @@ function renderAuth(mode = "login") {
     btn.disabled = true; const orig = btn.textContent; btn.textContent = "Attendere…";
     const data = Object.fromEntries(new FormData(e.target).entries());
     if (data.codice_fiscale) data.codice_fiscale = data.codice_fiscale.trim().toUpperCase();
+    // Non inviare i campi di verifica lasciati vuoti (recupero password).
+    if (mode === "recover") {
+      if (!data.codice_fiscale) delete data.codice_fiscale;
+      if (!data.recovery_key) delete data.recovery_key;
+    }
     try {
       const res = await api(ENDPOINTS[mode], { method: "POST", body: data });
       State.token = res.access_token;

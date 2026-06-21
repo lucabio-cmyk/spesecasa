@@ -105,10 +105,12 @@ soggetto e archivia.
 
 ## Superficie API (`app/api`)
 - `auth`: `/auth/register` (nuovo nucleo+admin), `/auth/join`, `/auth/login`,
-  `/auth/me`, `POST /auth/password-reset` (recupero password self-service senza
-  email: verifica l'identità con email + codice fiscale e imposta la nuova
-  password; errore generico per non rivelare email/CF esistenti. In alternativa
-  l'admin reimposta la password dalla modifica membro).
+  `/auth/me`, `POST /auth/password-reset` (recupero password self-service via GUI
+  senza email: verifica l'identità con email + **codice fiscale** dell'utente
+  **oppure** il **codice di recupero** del deploy `ADMIN_RECOVERY_KEY` — utile se
+  l'admin è chiuso fuori e non ha CF; confronto a tempo costante, errore generico
+  per non rivelare email/CF esistenti. In alternativa l'admin reimposta la
+  password dalla modifica membro, o si usa lo script `scripts/reset_password.py`).
 - `household`: `GET /household` (info + addestramento), `PATCH /household`
   (nome + `agent_instructions`, admin), `GET/POST /household/members`,
   `PATCH /household/members/{id}` (modifica dati membro post-creazione, es.
