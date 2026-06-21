@@ -73,7 +73,10 @@ async def join(body: JoinRequest, db: DB):
 async def login(body: LoginRequest, db: DB):
     res = await db.execute(select(User).where(User.email == body.email))
     user = res.scalars().first()
-    if not user or not verify_password(body.password, user.hashed_password):
+    # I soggetti senza accesso non hanno password: non possono autenticarsi.
+    if not user or not user.hashed_password or not verify_password(
+        body.password, user.hashed_password
+    ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenziali non valide")
     return Token(access_token=create_access_token(str(user.id)))
 

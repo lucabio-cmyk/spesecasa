@@ -26,12 +26,26 @@ class JoinRequest(BaseModel):
 
 
 class MemberInvite(BaseModel):
-    """L'admin crea l'accesso di un familiare nel proprio nucleo."""
+    """L'admin crea un familiare nel proprio nucleo.
 
-    email: EmailStr
-    password: str = Field(min_length=8)
+    Se vengono forniti email e password il familiare avrà accesso all'app
+    (login); altrimenti viene creato come semplice **soggetto senza accesso**,
+    utile solo per attribuire spese, documenti e bollette (pagante/beneficiario).
+    Email e password vanno fornite insieme: l'una senza l'altra non basta a
+    dare l'accesso."""
+
     full_name: str
+    email: EmailStr | None = None
+    password: str | None = Field(default=None, min_length=8)
     codice_fiscale: str | None = None
+
+    @model_validator(mode="after")
+    def _access_consistency(self) -> "MemberInvite":
+        if self.email and not self.password:
+            raise ValueError("Per dare l'accesso serve anche una password")
+        if self.password and not self.email:
+            raise ValueError("Per dare l'accesso serve anche un'email")
+        return self
 
 
 class MemberUpdate(BaseModel):
@@ -80,10 +94,28 @@ class Token(BaseModel):
 
 class UserOut(BaseModel):
     id: uuid.UUID
-    email: EmailStr
+    email: EmailStr | None = None
     full_name: str
     role: UserRole
     household_id: uuid.UUID
     codice_fiscale: str | None = None
+    # True se il familiare ha un accesso all'app (email + password impostate).
+    has_access: bool = False
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_access(cls, data):
+        # Dal modello ORM ricava has_access: c'è accesso se ha una password.
+        if not isinstance(data, dict):
+            data = {
+                "id": data.id,
+                "email": data.email,
+                "full_name": data.full_name,
+                "role": data.role,
+                "household_id": data.household_id,
+                "codice_fiscale": data.codice_fiscale,
+                "has_access": bool(getattr(data, "hashed_password", None)),
+            }
+        return data
