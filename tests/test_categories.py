@@ -59,6 +59,62 @@ def test_builtin_category_info_covers_all_builtins():
         assert name in MERCHANDISE_CATEGORY_INFO, f"manca descrizione per {name}"
 
 
+def test_supermarket_subcategories_grouped_and_farmaci_top_level():
+    from app.enums import (
+        MERCHANDISE_CATEGORY_GROUP,
+        MERCHANDISE_GROUP_INFO,
+        SUPERMARKET_GROUP,
+    )
+
+    # Il gruppo del supermercato esiste come macro-categoria.
+    assert SUPERMARKET_GROUP in MERCHANDISE_GROUP_INFO
+    # Le voci di reparto sono sottocategorie del supermercato.
+    assert MERCHANDISE_CATEGORY_GROUP["bevande"] == SUPERMARKET_GROUP
+    assert MERCHANDISE_CATEGORY_GROUP["frutta e verdura"] == SUPERMARKET_GROUP
+    assert MERCHANDISE_CATEGORY_GROUP["altre spese supermercato"] == SUPERMARKET_GROUP
+    # I farmaci sono una macro-categoria di primo livello (nessun padre).
+    assert MERCHANDISE_CATEGORY_GROUP["farmaci"] is None
+    # Ogni foglia ha una voce nella mappa dei gruppi.
+    from app.enums import MERCHANDISE_CATEGORIES
+
+    for name in MERCHANDISE_CATEGORIES:
+        assert name in MERCHANDISE_CATEGORY_GROUP
+
+
+def test_builtin_categories_expose_parent_and_groups():
+    from app.enums import SUPERMARKET_GROUP
+    from app.services.categories import builtin_categories, builtin_groups, is_group
+
+    by_name = {c["name"]: c for c in builtin_categories()}
+    assert by_name["bevande"]["parent"] == SUPERMARKET_GROUP
+    assert by_name["farmaci"]["parent"] is None
+    groups = {g["name"] for g in builtin_groups()}
+    assert SUPERMARKET_GROUP in groups
+    # Un gruppo non è una categoria-foglia utilizzabile direttamente.
+    assert is_group(SUPERMARKET_GROUP) is True
+    assert is_group("bevande") is False
+
+
+def test_reserved_synonyms_redirect_to_builtin_subcategory():
+    from app.services.categories import reserved_redirect
+
+    # I sinonimi generici del supermercato non diventano nuove categorie.
+    assert reserved_redirect("supermercato") == "altre spese supermercato"
+    assert reserved_redirect("alimentari") == "altre spese supermercato"
+    assert reserved_redirect("spesa supermercato") == "altre spese supermercato"
+    # Una categoria vera e propria non viene reindirizzata.
+    assert reserved_redirect("abbigliamento") is None
+    assert reserved_redirect("bevande") is None
+
+
+def test_create_expense_category_tool_accepts_parent():
+    from app.agent.tools import TOOLS
+
+    tool = next(t for t in TOOLS if t["name"] == "create_expense_category")
+    assert "parent" in tool["input_schema"]["properties"]
+    assert tool["input_schema"]["required"] == ["name"]
+
+
 def test_create_expense_category_tool_exposed():
     from app.agent.tools import TOOLS
 
@@ -109,3 +165,24 @@ def test_migration_chain_includes_categories():
     spec.loader.exec_module(mod)
     assert mod.down_revision == "0005_condo_units"
     assert mod.revision == "0006_custom_categories"
+
+
+def test_migration_chain_includes_category_parent():
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "alembic" / "versions" / "0010_category_parent.py"
+    )
+    spec = importlib.util.spec_from_file_location("mig_0010", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.down_revision == "0009_payment_methods"
+    assert mod.revision == "0010_category_parent"
+
+
+def test_expense_category_model_has_parent_column():
+    from app.models.category import ExpenseCategory
+
+    assert "parent" in ExpenseCategory.__table__.columns

@@ -279,6 +279,15 @@ async def list_categories(user: CurrentUser, db: DB):
     return await categories_service.known_categories(db, user.household_id)
 
 
+@router.get("/category-groups", response_model=list[dict])
+async def list_category_groups(user: CurrentUser, db: DB):
+    """Macro-categorie (gruppi) sotto cui si possono collocare le categorie.
+    Usate dalla GUI per la gerarchia. Al momento i gruppi sono solo quelli di
+    base (di fatto «spesa supermercato»): le categorie personalizzate sono
+    macro-categorie di primo livello."""
+    return categories_service.builtin_groups()
+
+
 @router.post("/categories", response_model=CategoryOut, status_code=201)
 async def create_category(body: CategoryCreate, user: CurrentUser, db: DB):
     """Crea una categoria personalizzata per il nucleo. Idempotente: se il nome
@@ -290,6 +299,7 @@ async def create_category(body: CategoryCreate, user: CurrentUser, db: DB):
         name=body.name,
         description=body.description,
         examples=body.examples,
+        parent=body.parent,
         source="user",
     )
     if result.get("error"):
@@ -325,6 +335,12 @@ async def update_category(
                 status.HTTP_409_CONFLICT, "Esiste già una categoria di base con questo nome"
             )
         category.name = norm
+    if "parent" in data:
+        parent_norm = categories_service.normalize_name(data["parent"]) or None
+        # Ammessi solo i gruppi noti (di base); altrimenti categoria di 1° livello.
+        if parent_norm and not categories_service.is_group(parent_norm):
+            parent_norm = None
+        category.parent = parent_norm
     if "description" in data:
         category.description = (data["description"] or None)
     if "examples" in data:

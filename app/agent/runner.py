@@ -91,23 +91,41 @@ async def _categories_context(db: AsyncSession, household_id) -> str:
     base = [c for c in known if c["builtin"]]
     custom = [c for c in known if not c["builtin"]]
 
-    base_lines = []
-    for c in base:
+    def _fmt(c) -> str:
         desc = f" — {c['description']}" if c.get("description") else ""
-        base_lines.append(f"- {c['name']}{desc}")
+        ex = c.get("examples")
+        ex_txt = f" (es. {', '.join(ex)})" if ex else ""
+        return f"{c['name']}{desc}{ex_txt}"
+
+    # Categorie di base divise tra macro-categorie di primo livello (parent
+    # vuoto) e sottocategorie di reparto del supermercato (parent valorizzato).
+    base_top = [c for c in base if not c.get("parent")]
+    base_subs = [c for c in base if c.get("parent")]
+    top_lines = [f"- {_fmt(c)}" for c in base_top]
+    sub_lines = [f"  · {_fmt(c)}" for c in base_subs]
+
     parts = [
-        "CATEGORIE MERCEOLOGICHE NOTE DEL NUCLEO (riusa SEMPRE una di queste quando "
-        "descrive bene la spesa; crea una nuova categoria con create_expense_category "
-        "SOLO se nessuna è adatta, con nome breve/generico/minuscolo). Categorie di "
-        "base:\n" + "\n".join(base_lines)
+        "CATEGORIE MERCEOLOGICHE NOTE DEL NUCLEO — gerarchia a due livelli "
+        "(macro-categoria → sottocategoria). Classifica SEMPRE sulla foglia più "
+        "specifica e riusa una categoria nota quando descrive bene la spesa; crea "
+        "una nuova categoria con create_expense_category SOLO se nessuna è adatta "
+        "(nome breve/generico/minuscolo, senza doppioni). Macro-categorie di base:\n"
+        + "\n".join(top_lines)
     ]
+    if sub_lines:
+        parts.append(
+            "Macro-categoria «spesa supermercato» — usa una di queste "
+            "SOTTOCATEGORIE di reparto per la spesa al supermercato (NON usare nomi "
+            "generici tipo 'supermercato'/'spesa'/'alimentari'):\n"
+            + "\n".join(sub_lines)
+        )
     if custom:
-        custom_lines = []
-        for c in custom:
-            desc = f" — {c['description']}" if c.get("description") else ""
-            ex = c.get("examples")
-            ex_txt = f" (es. {', '.join(ex)})" if ex else ""
-            custom_lines.append(f"- {c['name']}{desc}{ex_txt}")
+        custom_top = [c for c in custom if not c.get("parent")]
+        custom_subs = [c for c in custom if c.get("parent")]
+        custom_lines = [f"- {_fmt(c)}" for c in custom_top]
+        custom_lines += [
+            f"  · {_fmt(c)} [in «{c['parent']}»]" for c in custom_subs
+        ]
         parts.append(
             "Categorie personalizzate del nucleo (già create, riusale):\n"
             + "\n".join(custom_lines)

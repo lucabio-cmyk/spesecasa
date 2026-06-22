@@ -17,12 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enums import (
     MERCHANDISE_CATEGORIES,
+    MERCHANDISE_CATEGORY_GROUP,
     MERCHANDISE_CATEGORY_INFO,
+    MERCHANDISE_GROUP_INFO,
+    RESERVED_GROUP_SYNONYMS,
     SENSITIVE_CATEGORIES,
 )
 from app.models.category import ExpenseCategory
 
 _BUILTIN_NAMES = frozenset(MERCHANDISE_CATEGORIES)
+_BUILTIN_GROUPS = frozenset(MERCHANDISE_GROUP_INFO)
 _MAX_NAME_LEN = 100
 _MIN_NAME_LEN = 2
 
@@ -39,11 +43,36 @@ def is_builtin(name: str | None) -> bool:
     return normalize_name(name) in _BUILTIN_NAMES
 
 
+def is_group(name: str | None) -> bool:
+    """True se il nome è una macro-categoria (gruppo) di base, es. 'spesa
+    supermercato'. I gruppi non vanno usati direttamente come `merch_category`."""
+    return normalize_name(name) in _BUILTIN_GROUPS
+
+
+def reserved_redirect(name: str | None) -> str | None:
+    """Se `name` è un sinonimo generico del supermercato o il nome di un gruppo,
+    restituisce la sottocategoria di base da usare al suo posto (così non si
+    creano doppioni del gruppo); altrimenti None."""
+    norm = normalize_name(name)
+    if norm in RESERVED_GROUP_SYNONYMS:
+        return RESERVED_GROUP_SYNONYMS[norm]
+    return None
+
+
+def builtin_groups() -> list[dict]:
+    """Le macro-categorie (gruppi) di base, con la relativa descrizione."""
+    return [
+        {"name": name, "description": desc}
+        for name, desc in MERCHANDISE_GROUP_INFO.items()
+    ]
+
+
 def builtin_categories() -> list[dict]:
-    """Le categorie di base, con descrizione e flag di sensibilità."""
+    """Le categorie di base (foglie), con descrizione, gruppo e sensibilità."""
     return [
         {
             "name": name,
+            "parent": MERCHANDISE_CATEGORY_GROUP.get(name),
             "description": MERCHANDISE_CATEGORY_INFO.get(name),
             "examples": None,
             "builtin": True,
@@ -58,6 +87,7 @@ def builtin_categories() -> list[dict]:
 def _custom_to_dict(c: ExpenseCategory) -> dict:
     return {
         "name": c.name,
+        "parent": c.parent,
         "description": c.description,
         "examples": c.examples,
         "builtin": False,
@@ -88,6 +118,18 @@ async def known_names(db: AsyncSession, household_id: uuid.UUID) -> set[str]:
     return set(_BUILTIN_NAMES) | {c.name for c in customs}
 
 
+async def leaf_to_group(db: AsyncSession, household_id: uuid.UUID) -> dict[str, str]:
+    """Mappa categoria-foglia → macro-categoria (gruppo) per il roll-up nelle
+    statistiche. Le foglie senza padre (es. 'farmaci' o le macro personalizzate)
+    sono mappate su se stesse. Include base + personalizzate."""
+    mapping: dict[str, str] = {}
+    for name, grp in MERCHANDISE_CATEGORY_GROUP.items():
+        mapping[name] = grp or name
+    for c in await list_custom(db, household_id, include_inactive=True):
+        mapping[c.name] = c.parent or c.name
+    return mapping
+
+
 def validate_name(name: str | None) -> tuple[str, str | None]:
     """Restituisce (nome_normalizzato, errore). errore=None se valido."""
     norm = normalize_name(name)
@@ -104,11 +146,13 @@ async def create_category(
     name: str,
     description: str | None = None,
     examples: list[str] | None = None,
+    parent: str | None = None,
     source: str = "agent",
 ) -> dict:
     """Crea (o riusa) una categoria personalizzata. Idempotente e anti-duplicato:
     se il nome coincide con una categoria di base o con una personalizzata già
-    esistente, NON la duplica e segnala lo stato."""
+    esistente, NON la duplica e segnala lo stato. `parent` colloca la categoria
+    sotto una macro-categoria (gruppo) per mantenere la gerarchia coerente."""
     norm, error = validate_name(name)
     if error:
         return {"created": False, "error": error}
@@ -120,6 +164,26 @@ async def create_category(
             "category": {"name": norm, "builtin": True},
             "message": f"'{norm}' è già una categoria di base: usala direttamente, non serve crearla.",
         }
+
+    # Anti-doppione: i sinonimi generici del supermercato (e i nomi dei gruppi)
+    # non diventano nuove categorie, ma rimandano alla sottocategoria di base.
+    redirect = reserved_redirect(norm)
+    if redirect:
+        return {
+            "created": False,
+            "builtin": True,
+            "category": {"name": redirect, "builtin": True},
+            "message": (
+                f"'{norm}' è troppo generico (è di fatto il gruppo «spesa "
+                f"supermercato»): usa la categoria di base '{redirect}' o una "
+                "sottocategoria di reparto più precisa, non creare un doppione."
+            ),
+        }
+
+    # Normalizza/valida il gruppo: ammessi solo i gruppi di base noti.
+    parent_norm = normalize_name(parent) or None
+    if parent_norm and parent_norm not in _BUILTIN_GROUPS:
+        parent_norm = None
 
     existing = (
         await db.execute(
@@ -141,6 +205,9 @@ async def create_category(
         if examples and not existing.examples:
             existing.examples = _clean_examples(examples)
             changed = True
+        if parent_norm and not existing.parent:
+            existing.parent = parent_norm
+            changed = True
         if changed:
             await db.commit()
             await db.refresh(existing)
@@ -154,6 +221,7 @@ async def create_category(
     category = ExpenseCategory(
         household_id=household_id,
         name=norm,
+        parent=parent_norm,
         description=description.strip() if description else None,
         examples=_clean_examples(examples),
         source=source if source in ("agent", "user") else "agent",
@@ -187,6 +255,10 @@ async def ensure_categories(
             continue
         valid, error = validate_name(norm)
         if error:
+            continue
+        # Non registrare doppioni del gruppo supermercato (sinonimi generici):
+        # restano fuori dal catalogo per non frammentare/duplicare.
+        if reserved_redirect(norm):
             continue
         db.add(
             ExpenseCategory(

@@ -18,7 +18,13 @@ class ExpenseCategory(Base, TimestampMixin):
     descrive bene una spesa) o dall'utente. Sono scoping per nucleo e arricchite
     con descrizione ed esempi, così la classificazione resta coerente nel tempo
     e l'archivio è più informativo. `name` è normalizzato (minuscolo, spazi
-    ridotti) e unico per nucleo."""
+    ridotti) e unico per nucleo.
+
+    `parent` colloca la categoria in una macro-categoria (gruppo) per tenere
+    coerente la gerarchia a due livelli: None ⇒ macro-categoria di primo livello
+    (es. "abbigliamento"); un valore ⇒ sottocategoria del gruppo indicato (es. una
+    voce sotto "spesa supermercato"). È un nome di gruppo normalizzato, non una FK:
+    i gruppi possono essere di base (`MERCHANDISE_GROUP_INFO`)."""
 
     __tablename__ = "expense_categories"
     __table_args__ = (
@@ -32,6 +38,8 @@ class ExpenseCategory(Base, TimestampMixin):
         ForeignKey("households.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(100))
+    # Macro-categoria (gruppo) di appartenenza; None = categoria di primo livello.
+    parent: Mapped[str | None] = mapped_column(String(100), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Esempi di voci che rientrano nella categoria (lista di stringhe), utili
     # all'agente per classificare in modo coerente.

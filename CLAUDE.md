@@ -62,21 +62,37 @@ soggetto e archivia.
   riferirsi; in upload (no domande) marca `da_verificare` e annota. Le
   rate/quote a carico dell'unità diventano `Bill` (utility_type=condominio) con
   scadenza → scadenzario. `query_bills`/`bills_service` filtrano per unità.
-- **Categorie merceologiche estensibili** (`enums.MERCHANDISE_CATEGORIES` +
-  `MERCHANDISE_CATEGORY_INFO`, `app/models/category.py:ExpenseCategory`,
-  `app/services/categories.py`, tool `create_expense_category`): oltre alle
-  categorie "di base" (stabili, con descrizione), ogni nucleo può avere categorie
+- **Categorie merceologiche a due livelli ed estensibili**
+  (`enums.MERCHANDISE_CATEGORIES`/`MERCHANDISE_CATEGORY_INFO`/
+  `MERCHANDISE_CATEGORY_GROUP`/`MERCHANDISE_GROUP_INFO`/`SUPERMARKET_GROUP`/
+  `RESERVED_GROUP_SYNONYMS`, `app/models/category.py:ExpenseCategory`,
+  `app/services/categories.py`, tool `create_expense_category`): le categorie
+  sono organizzate in una **gerarchia a due livelli** (macro-categoria →
+  sottocategoria) per restare coerenti ed evitare doppioni. La spesa al
+  supermercato è la macro-categoria «spesa supermercato», suddivisa per reparto
+  nelle SOTTOCATEGORIE di base (frutta e verdura, carne e pesce, bevande, …);
+  `farmaci` e le macro create dal nucleo sono di primo livello. La spesa resta
+  classificata sulla **foglia** (la più specifica) in `Expense.merch_category`;
+  il gruppo si deriva dal catalogo (`MERCHANDISE_CATEGORY_GROUP` per le di base,
+  `ExpenseCategory.parent` per le personalizzate) senza duplicare l'info su ogni
+  riga. Oltre alle categorie "di base" ogni nucleo può avere categorie
   PERSONALIZZATE (tabella `expense_categories`, scoping per nucleo, con
-  descrizione/esempi/origine). L'agente le crea quando nessuna categoria nota
-  descrive bene una spesa (nome breve/generico/minuscolo) e le riusa: a ogni run
-  il runner inietta nel system prompt le **categorie note** (di base +
-  personalizzate) via `_categories_context`; `merch_category` non è più un enum
-  chiuso negli strumenti (stringa libera) e `add_expenses`/`record_expense`
+  `parent`/descrizione/esempi/origine). L'agente le crea quando nessuna categoria
+  nota descrive bene una spesa (di norma una macro di primo livello; `parent` per
+  una nuova sottocategoria di un gruppo) e le riusa: a ogni run il runner inietta
+  nel system prompt le **categorie note** raggruppate via `_categories_context`;
+  `merch_category` è stringa libera e `add_expenses`/`record_expense`
   auto-registrano (`categories_service.ensure_categories`) le categorie usate non
-  ancora note, così il catalogo resta allineato. I medicinali restano nella
-  categoria di base `farmaci` (l'agente non crea categorie per dati sanitari).
-  Gestibili da GUI (Impostazioni → Categorie) e via API `GET/POST
-  /household/categories`, `PATCH/DELETE /household/categories/{id}`.
+  ancora note. **Anti-doppione**: i sinonimi generici del supermercato
+  (`RESERVED_GROUP_SYNONYMS`: supermercato/spesa/alimentari/…) non diventano nuove
+  categorie ma rimandano a `altre spese supermercato` (vedi
+  `categories_service.reserved_redirect`). I medicinali restano nella categoria di
+  base `farmaci` (l'agente non crea categorie per dati sanitari). `stats.by_category`
+  fa il **roll-up alle macro-categorie** con il dettaglio delle sottocategorie
+  (`subcategories`); `GET /expenses?group=` filtra tutte le foglie di un gruppo
+  (drill-down dalla dashboard). Gestibili da GUI (Impostazioni → Categorie, con
+  selettore del gruppo) e via API `GET/POST /household/categories`,
+  `PATCH/DELETE /household/categories/{id}`, `GET /household/category-groups`.
 - **Farmaci (categoria + codici + riservatezza admin)** (`enums.SENSITIVE_CATEGORIES`,
   sezione FARMACI del system prompt, `deps.require_admin`/`AdminUser`): i
   medicinali hanno una categoria merceologica dedicata `farmaci` (distinta da
@@ -184,8 +200,9 @@ soggetto e archivia.
   immobiliari del nucleo per la gestione del condominio e l'attribuzione delle
   spese (una sola `is_primary` per nucleo).
 - `ExpenseCategory`(household_id, name (normalizzato, unico per nucleo),
-  description, examples (JSONB), source `agent`/`user`, active). Categorie
-  merceologiche PERSONALIZZATE del nucleo, oltre a quelle di base.
+  parent (macro-categoria/gruppo; None = primo livello), description,
+  examples (JSONB), source `agent`/`user`, active). Categorie merceologiche
+  PERSONALIZZATE del nucleo, oltre a quelle di base.
 - `PaymentMethod`(household_id, user_id (intestatario), label, method_type
   (`PaymentMethodType`), provider, last4, is_default, active, notes,
   details (JSONB)). Strumenti di pagamento dei membri (carte, bancomat, ...).
