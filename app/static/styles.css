@@ -253,6 +253,24 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .dot { width: 11px; height: 11px; border-radius: 3px; }
 .donut-wrap { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
 
+/* ---------- Column chart (andamento mensile) ---------- */
+.col-chart { display: flex; align-items: flex-end; gap: 6px; height: 200px; padding-top: 8px; }
+.col-item { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 7px; height: 100%; border-radius: 8px; transition: background .14s ease; }
+.col-bars { flex: 1; width: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+.col-amt { font-size: 10px; color: var(--text-faint); font-variant-numeric: tabular-nums; white-space: nowrap; min-height: 12px; }
+.col-stack { width: 64%; max-width: 36px; min-height: 2px; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--surface-2); }
+.col-seg { width: 100%; transition: height .5s ease; }
+.col-lbl { font-size: 11px; color: var(--text-soft); white-space: nowrap; }
+.col-clickable { cursor: pointer; }
+.col-clickable:hover { background: var(--surface-2); }
+.col-clickable:hover .col-stack { filter: brightness(1.08); }
+.col-clickable:hover .col-lbl { color: var(--brand); font-weight: 600; }
+
+/* Mini-statistiche sopra il grafico mensile */
+.mini-stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.mini-stats > div { flex: 1; min-width: 120px; display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; background: var(--surface-2); border-radius: 10px; }
+.mini-stats b { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; }
+
 /* ---------- Empty / loading ---------- */
 .empty { text-align: center; padding: 48px 20px; color: var(--text-soft); }
 .empty .big { font-size: 46px; margin-bottom: 10px; opacity: .8; }
@@ -331,4 +349,7 @@ table.data .input, table.data .inline-select { padding: 6px 8px; font-size: 13px
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 40; }
   .bar-row { grid-template-columns: 110px 1fr 76px; }
   .kpi .value { font-size: 24px; }
+  .col-chart { gap: 3px; height: 170px; }
+  .col-amt { display: none; }
+  .col-lbl { font-size: 10px; }
 }
