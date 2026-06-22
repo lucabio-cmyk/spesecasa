@@ -83,7 +83,17 @@ soggetto e archivia.
   nel system prompt le **categorie note** raggruppate via `_categories_context`;
   `merch_category` è stringa libera e `add_expenses`/`record_expense`
   auto-registrano (`categories_service.ensure_categories`) le categorie usate non
-  ancora note. **Anti-doppione**: i sinonimi generici del supermercato
+  ancora note. **Canonicalizzazione al salvataggio**
+  (`categories_service.canonical_category`, alias in
+  `enums.MERCHANDISE_CATEGORY_ALIASES`): `add_expenses`/`record_expense` (e la POST
+  REST `/expenses`) riconducono la categoria alla foglia canonica — normalizzano
+  (minuscolo/trim) e rimappano le varianti comuni — prima di salvarla, così la riga
+  finisce sempre nella categoria attesa da viste, aggregati e filtro di
+  riservatezza. È critico per i FARMACI: una riga salvata come `Farmaci`,
+  `farmaco`, `medicinali` o `farmacia` non corrisponderebbe al confronto esatto
+  `farmaci` e sparirebbe dalla vista riservata (vedi migrazione
+  `0011_canonicalize_farmaci` per allineare lo storico). **Anti-doppione**: i
+  sinonimi generici del supermercato
   (`RESERVED_GROUP_SYNONYMS`: supermercato/spesa/alimentari/…) non diventano nuove
   categorie ma rimandano a `altre spese supermercato` (vedi
   `categories_service.reserved_redirect`). I medicinali restano nella categoria di
