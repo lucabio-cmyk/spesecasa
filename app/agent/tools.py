@@ -712,6 +712,9 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 return {"ok": False, "error": "documento non trovato"}
             inserted = 0
             skipped: list[str] = []
+            # Categorie (canoniche) delle sole righe effettivamente inserite: usate
+            # per allineare il catalogo, senza registrare quelle delle righe scartate.
+            inserted_categories: list[str | None] = []
             for line in tool_input.get("lines", []):
                 amount = to_decimal(line.get("line_amount"))
                 if amount is None:
@@ -726,6 +729,10 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                     )
                     skipped.append(str(desc)[:80])
                     continue
+                # Canonicalizza la categoria (normalizza + rimappa varianti es.
+                # 'Farmaci'/'medicinali' → 'farmaci'): così le righe finiscono
+                # sempre nella categoria attesa da viste, aggregati e riservatezza.
+                merch_cat = categories_service.canonical_category(line.get("merch_category"))
                 pdate = to_date(line.get("purchase_date")) or (doc.doc_date if doc else None)
                 fyear = line.get("fiscal_year")
                 if fyear:
@@ -752,7 +759,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                     merchant=line.get("merchant") or (doc.issuer if doc else None),
                     description_original=line.get("description_original"),
                     description_normalized=line.get("description_normalized"),
-                    merch_category=line.get("merch_category"),
+                    merch_category=merch_cat,
                     quantity=to_decimal(line.get("quantity")),
                     unit_price=to_decimal(line.get("unit_price")),
                     line_amount=amount,
@@ -767,12 +774,11 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 )
                 db.add(expense)
                 inserted += 1
+                inserted_categories.append(merch_cat)
             # Mantieni il catalogo allineato: registra come personalizzate le
             # categorie usate che non sono di base né già note (stessa transazione).
             new_categories = await categories_service.ensure_categories(
-                db,
-                ctx.household_id,
-                (line.get("merch_category") for line in tool_input.get("lines", [])),
+                db, ctx.household_id, inserted_categories
             )
             # Annota sul documento le righe non calcolate, così l'agente di
             # orchestrazione le segnala (avviso "righe non gestite correttamente").
@@ -812,6 +818,8 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             pm_id = await resolve_payment_method_id(
                 db, ctx.household_id, tool_input.get("payment_method_id"), payer_id
             )
+            # Canonicalizza la categoria (vedi add_expenses): es. 'medicinali' → 'farmaci'.
+            merch_cat = categories_service.canonical_category(tool_input.get("merch_category"))
             expense = Expense(
                 household_id=ctx.household_id,
                 document_id=None,  # spesa manuale, senza documento allegato
@@ -822,7 +830,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 merchant=tool_input.get("merchant"),
                 description_original=tool_input.get("description_original"),
                 description_normalized=tool_input.get("description_normalized"),
-                merch_category=tool_input.get("merch_category"),
+                merch_category=merch_cat,
                 quantity=to_decimal(tool_input.get("quantity")),
                 unit_price=to_decimal(tool_input.get("unit_price")),
                 line_amount=amount,
@@ -837,7 +845,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             )
             db.add(expense)
             new_categories = await categories_service.ensure_categories(
-                db, ctx.household_id, [tool_input.get("merch_category")]
+                db, ctx.household_id, [merch_cat]
             )
             await db.commit()
             await db.refresh(expense)

@@ -111,6 +111,10 @@ async def create_expense(body: ExpenseCreate, user: CurrentUser, db: DB):
     # Pagante di default: l'utente che registra la spesa, se non già indicato.
     if expense.payer_user_id is None:
         expense.payer_user_id = user.id
+    # Canonicalizza la categoria (normalizza + rimappa varianti, es. 'medicinali'
+    # → 'farmaci') così la riga è coerente con viste/aggregati/riservatezza.
+    if expense.merch_category:
+        expense.merch_category = categories_service.canonical_category(expense.merch_category)
     db.add(expense)
     await db.commit()
     await db.refresh(expense)

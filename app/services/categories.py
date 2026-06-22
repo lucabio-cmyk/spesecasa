@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enums import (
     MERCHANDISE_CATEGORIES,
+    MERCHANDISE_CATEGORY_ALIASES,
     MERCHANDISE_CATEGORY_GROUP,
     MERCHANDISE_CATEGORY_INFO,
     MERCHANDISE_GROUP_INFO,
@@ -57,6 +58,32 @@ def reserved_redirect(name: str | None) -> str | None:
     if norm in RESERVED_GROUP_SYNONYMS:
         return RESERVED_GROUP_SYNONYMS[norm]
     return None
+
+
+def canonical_category(name: str | None) -> str | None:
+    """Riconduce un nome categoria alla sua forma CANONICA usata in tutto il
+    sistema per il confronto. È il punto unico da usare quando si SALVA una
+    `merch_category` (da agente o da chat), così le righe finiscono sempre nella
+    categoria attesa da viste, aggregati e filtro di riservatezza.
+
+    Passi: (1) normalizza (minuscolo/trim); (2) rimappa varianti/sinonimi alla
+    foglia di base corretta (es. 'Farmaci'/'medicinali' → 'farmaci'); (3) reindirizza
+    i sinonimi generici del supermercato alla sottocategoria di ripiego (es.
+    'supermercato' → 'altre spese supermercato'). Restituisce None se vuoto.
+
+    Senza questo passaggio una riga di medicinale etichettata in modo non allineato
+    (maiuscole o sinonimo) NON corrisponderebbe a "farmaci": sparirebbe dalla vista
+    riservata e sfuggirebbe al filtro del dato sanitario."""
+    norm = normalize_name(name)
+    if not norm:
+        return None
+    alias = MERCHANDISE_CATEGORY_ALIASES.get(norm)
+    if alias:
+        return alias
+    redirect = reserved_redirect(norm)
+    if redirect:
+        return redirect
+    return norm
 
 
 def builtin_groups() -> list[dict]:

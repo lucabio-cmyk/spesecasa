@@ -107,6 +107,42 @@ def test_reserved_synonyms_redirect_to_builtin_subcategory():
     assert reserved_redirect("bevande") is None
 
 
+def test_canonical_category_maps_farmaci_variants():
+    from app.services.categories import canonical_category
+
+    # Casing/spazi: la foglia canonica è sempre minuscola e ripulita.
+    assert canonical_category("Farmaci") == "farmaci"
+    assert canonical_category("  FARMACI ") == "farmaci"
+    # Varianti/sinonimi del medicinale ricondotti a 'farmaci' (critico per la
+    # vista riservata e il filtro di riservatezza del dato sanitario).
+    for variant in ("farmaco", "medicinali", "medicinale", "medicina",
+                    "farmacia", "medicinali da banco"):
+        assert canonical_category(variant) == "farmaci", variant
+    # I sinonimi generici del supermercato restano reindirizzati.
+    assert canonical_category("supermercato") == "altre spese supermercato"
+    # Una categoria già canonica resta invariata; vuoto → None.
+    assert canonical_category("bevande") == "bevande"
+    assert canonical_category(None) is None
+    assert canonical_category("   ") is None
+    # La parafarmacia NON è un medicinale: non va ricondotta a 'farmaci'.
+    assert canonical_category("parafarmacia da supermercato") == "parafarmacia da supermercato"
+
+
+def test_migration_chain_canonicalize_farmaci():
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "alembic" / "versions" / "0011_canonicalize_farmaci.py"
+    )
+    spec = importlib.util.spec_from_file_location("mig_0011", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.down_revision == "0010_category_parent"
+    assert mod.revision == "0011_canonicalize_farmaci"
+
+
 def test_create_expense_category_tool_accepts_parent():
     from app.agent.tools import TOOLS
 

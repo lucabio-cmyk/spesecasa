@@ -236,6 +236,27 @@ RESERVED_GROUP_SYNONYMS: dict[str, str] = {
     "drogheria": "altre spese supermercato",
 }
 
+# Varianti/sinonimi comuni con cui l'agente può etichettare una categoria di base
+# con un nome non perfettamente allineato alla foglia canonica: vanno ricondotti
+# alla foglia corretta al momento del salvataggio, così le righe finiscono SEMPRE
+# nella categoria attesa da viste e aggregati. È critico per i FARMACI: una riga
+# salvata come "Farmaci" (maiuscola), "farmaco" o "medicinali" non corrisponderebbe
+# al confronto esatto "farmaci" e sparirebbe dalla vista riservata, sfuggendo anche
+# al filtro di riservatezza del dato sanitario. La normalizzazione (minuscolo/trim)
+# è gestita a parte: qui stanno solo le rimappature di nome.
+MERCHANDISE_CATEGORY_ALIASES: dict[str, str] = {
+    "farmaco": "farmaci",
+    "medicinale": "farmaci",
+    "medicinali": "farmaci",
+    "medicina": "farmaci",
+    "medicine": "farmaci",
+    "farmacia": "farmaci",
+    "farmaco da banco": "farmaci",
+    "farmaci da banco": "farmaci",
+    "medicinali da banco": "farmaci",
+    "medicinale da banco": "farmaci",
+}
+
 # Categorie merceologiche che contengono dati sanitari sensibili: i FARMACI
 # (es. dallo "scontrino parlante" della farmacia, con codice AIC/minsan) sono
 # dati relativi alla salute. La visualizzazione di DETTAGLIO di queste spese è
