@@ -764,7 +764,9 @@ function biGroupMap() {
 const BI_DIMS = {
   month: {
     label: "Mese",
-    key: (r) => r.purchase_date ? (new Date(r.purchase_date).getMonth() + 1) : 0,
+    // Estrae il mese dalla stringa ISO (YYYY-MM-DD) senza passare da Date():
+    // evita lo slittamento di giorno/mese nei fusi con offset negativo.
+    key: (r) => r.purchase_date ? parseInt(String(r.purchase_date).split("-")[1], 10) : 0,
     text: (k) => (Number(k) ? MONTHS_FULL[Number(k)] : "Senza data"),
   },
   group: {
@@ -828,7 +830,7 @@ function biToggle(dim, val) {
 // Porta i filtri attivi nella vista Spese (per modificare i movimenti).
 function biOpenInExpenses() {
   const f = defaultExpFilters();
-  f.fiscal_year = String(biYear);
+  f.fiscal_year = biYear ? String(biYear) : "";
   if (biFilters.month) f.month = String(biFilters.month);
   if (biFilters.group) f.group = biFilters.group;
   if (biFilters.payer) f.payer_user_id = biFilters.payer;
@@ -950,7 +952,7 @@ function biRender() {
   const nFilters = Object.keys(biFilters).length;
 
   const kpis = [
-    { label: nFilters ? "Spesa filtrata" : `Spesa ${biYear}`, value: eur(total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"} attiv${nFilters === 1 ? "o" : "i"}` : "tutte le spese dell'anno" },
+    { label: nFilters ? "Spesa filtrata" : (biYear ? `Spesa ${biYear}` : "Spesa totale"), value: eur(total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"} attiv${nFilters === 1 ? "o" : "i"}` : (biYear ? "tutte le spese dell'anno" : "tutte le spese registrate") },
     { label: "Movimenti", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${biData.length} in totale nell'anno` },
     { label: "Categorie", value: cats, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "categorie distinte nel filtro" },
     { label: "Media a movimento", value: eur(avg), icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: "importo medio per riga" },
@@ -983,7 +985,7 @@ function biRender() {
       ${chartCard("Personale vs familiare", biDonutChart("scope", gmap))}
       ${chartCard("Classificazione fiscale", biDonutChart("fiscal", gmap))}
     </div>
-    ${chartCard(`Movimenti ${nFilters ? "filtrati" : biYear}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
+    ${chartCard(`Movimenti ${nFilters ? "filtrati" : (biYear || "Tutti gli anni")}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
 
   biBindClicks(c);
 }
@@ -995,12 +997,13 @@ async function viewEsplora() {
   // svuota la topbar per non accumulare selettori duplicati al cambio anno.
   $("#topbar-actions").innerHTML = "";
   $("#topbar-actions").appendChild(await yearSelector(viewEsplora));
-  // L'esplorazione è per anno: senza anno selezionato usiamo quello corrente.
-  biYear = State.year || new Date().getFullYear();
+  // L'esplorazione segue il selettore anno: con "Tutti gli anni" (biYear vuoto)
+  // carichiamo i movimenti di tutti gli anni (fiscal_year omesso lato API).
+  biYear = State.year || "";
   try {
-    biData = await api(`/expenses?fiscal_year=${biYear}`);
+    biData = await api(biYear ? `/expenses?fiscal_year=${biYear}` : "/expenses");
     if (!biData.length) {
-      c.innerHTML = emptyBox("🧭", "Nessuna spesa da esplorare", `Non ci sono movimenti per il ${biYear}. Carica documenti o registra spese, poi torna qui per l'analisi interattiva.`, "Carica documento", "upload");
+      c.innerHTML = emptyBox("🧭", "Nessuna spesa da esplorare", `Non ci sono movimenti ${biYear ? "per il " + biYear : "registrati"}. Carica documenti o registra spese, poi torna qui per l'analisi interattiva.`, "Carica documento", "upload");
       bindEmpty(c);
       return;
     }
