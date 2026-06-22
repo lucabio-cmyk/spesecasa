@@ -257,7 +257,14 @@ soggetto e archivia.
   la riservatezza dei farmaci per i non-admin. Lato bollette: `/bills/monthly`
   e `/bills/analysis` (ora con confronto anno-su-anno: spesa, consumo e costo
   unitario). Nella GUI la sezione **Analisi** (`viewAnalisi`) mostra insight,
-  andamento mensile, top esercenti e tabella di confronto tra anni.
+  andamento mensile, top esercenti e tabella di confronto tra anni. La sezione
+  **Esplora** (`viewEsplora`) è una vista interattiva in stile BI: carica una
+  volta i movimenti di spesa dell'anno (`GET /expenses?fiscal_year=`) e calcola
+  tutti gli aggregati lato client; cliccando un elemento di un qualsiasi grafico
+  (mese, categoria, pagante, ambito, classifica fiscale) si attiva un filtro a
+  **livello di pagina** che ricalcola gli altri grafici, i KPI e la tabella
+  (cross-filtering "escludi te stesso"); i filtri attivi sono "slicer"
+  rimovibili e "Apri nelle Spese" porta i filtri nella vista Spese.
 - `chat`: `POST /chat` (agente conversazionale sullo storico).
 - `review`: `POST /review/run` (avvia la revisione), `GET /review` (voci, filtro
   per stato/gravità/anno; default `pending`), `GET /review/summary` (conteggi per
