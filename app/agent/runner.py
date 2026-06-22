@@ -5,7 +5,12 @@ from anthropic import AsyncAnthropic
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.caching import cached_system, mark_messages_cache
+from app.agent.caching import (
+    cached_system,
+    limit_history,
+    log_usage,
+    mark_messages_cache,
+)
 from app.agent.system_prompt import SYSTEM_PROMPT
 from app.agent.tools import TOOLS, AgentContext, dispatch, file_to_content_block
 from app.config import settings
@@ -168,6 +173,7 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
             tools=tools,
             messages=messages,
         )
+        log_usage(resp, "document" if ctx.document_id else "chat")
 
         tool_results: list[dict] = []
         # Blocchi file (PDF/immagine) da allegare alla risposta degli strumenti,
@@ -298,6 +304,7 @@ async def chat(
     ctx = AgentContext(
         household_id=household_id, user_id=user_id, document_id=None, is_admin=is_admin
     )
+    history = limit_history(history, settings.chat_history_max_messages)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": message})
     return await _run_loop(db, ctx, messages) or "Non ho una risposta."

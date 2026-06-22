@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     # loop tool-use; marcandolo con cache_control viene servito dalla cache
     # (~10% del costo input) invece di rielaborarlo. Forte risparmio di token.
     enable_prompt_caching: bool = True
+    # TTL della cache del prompt: "5m" (default) o "1h" (write a 2x ma riusabile
+    # su pause più lunghe, utile per usi a raffica).
+    prompt_cache_ttl: str = "5m"
+    # Finestra mobile sulla cronologia di chat: tiene solo gli ultimi N turni
+    # inviati al modello (0 = illimitato). Limita la crescita dei token nelle
+    # conversazioni lunghe; l'agente attinge comunque al DB con gli strumenti.
+    chat_history_max_messages: int = 40
+    # Logga l'uso dei token (cache read/creation, input, output) per misurare il
+    # risparmio della cache. Off di default per non generare rumore nei log.
+    log_token_usage: bool = False
     agent_max_tool_iterations: int = 24
     # Ricerca web dell'agente per affinare/verificare le regole fiscali aggiornate.
     enable_web_search: bool = True

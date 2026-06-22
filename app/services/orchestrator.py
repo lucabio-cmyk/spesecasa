@@ -29,7 +29,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.caching import cached_system, mark_messages_cache
+from app.agent.caching import cached_system, log_usage, mark_messages_cache
 from app.config import settings
 from app.enums import (
     DocumentStatus,
@@ -617,6 +617,7 @@ async def _run_llm(
                 tools=_PROPOSAL_TOOLS,
                 messages=messages,
             )
+            log_usage(resp, "orchestrator")
             tool_results: list[dict] = []
             for block in resp.content:
                 if block.type == "tool_use":
