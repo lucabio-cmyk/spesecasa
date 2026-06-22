@@ -348,7 +348,6 @@ function renderAuth(mode = "login") {
 const NAV = [
   { id: "dashboard", icon: "📊", label: "Dashboard" },
   { id: "analisi", icon: "📈", label: "Analisi" },
-  { id: "esplora", icon: "🧭", label: "Esplora" },
   { id: "upload", icon: "⬆️", label: "Carica documento" },
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "revisione", icon: "🔍", label: "Revisione" },
@@ -419,8 +418,7 @@ function navigate(view) {
   app().querySelectorAll("[data-nav]").forEach(b => b.classList.toggle("active", b.dataset.nav === view));
   const titles = {
     dashboard: ["Dashboard", "Panoramica delle spese e dei documenti del nucleo"],
-    analisi: ["Analisi", "Andamento mensile, esercenti, confronto tra anni e osservazioni automatiche"],
-    esplora: ["Esplora", "Analisi interattiva delle spese: clicca i grafici per filtrare tutta la pagina (stile BI)"],
+    analisi: ["Analisi", "Osservazioni, confronti e analisi interattiva: clicca i grafici per filtrare tutta la pagina (stile BI)"],
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
@@ -435,7 +433,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, analisi: viewAnalisi, esplora: viewEsplora, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -681,74 +679,31 @@ function insightCard(i) {
     </div>`;
 }
 
-async function viewAnalisi() {
-  const c = $("#content");
-  c.innerHTML = skeletonGrid();
-  $("#topbar-actions").appendChild(await yearSelector(viewAnalisi));
-  // Le analisi mensili/confronto/insight sono per anno: se "Tutti gli anni" è
-  // selezionato, usiamo l'anno corrente come riferimento.
-  const year = State.year || new Date().getFullYear();
-  const yq = `?year=${year}`;
-  try {
-    const [insights, monthly, top, cmp] = await Promise.all([
-      api(`/stats/insights${yq}`),
-      api(`/stats/monthly${yq}`),
-      api(`/stats/top-merchants${yq}&limit=10`),
-      api(`/stats/compare${yq}`),
-    ]);
+/* La vista Analisi è una pagina unica e integrata (vedi sezione "Analisi
+   integrata" più sotto): mette insieme le osservazioni automatiche e il
+   confronto tra anni (calcolati dal server) con l'esplorazione interattiva in
+   stile BI (cross-filtering lato client). L'implementazione vive in
+   `viewAnalisi`/`biRender`, definite dopo gli helper interattivi. */
 
-    const merchRows = top.map(m => ({ label: m.merchant, total: m.total }));
-    const cmpRows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0).slice(0, 12);
-
-    const kpis = [
-      { label: `Totale ${year}`, value: eur(cmp.current_total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: `${cmp.by_category.length} categori${cmp.by_category.length === 1 ? "a" : "e"}` },
-      { label: `Totale ${cmp.previous_year}`, value: eur(cmp.previous_total), icon: "🗓️", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "anno precedente" },
-      { label: "Variazione", value: cmp.delta_pct === null ? "—" : `${cmp.delta_pct > 0 ? "+" : ""}${cmp.delta_pct.toFixed(1)}%`, icon: cmp.delta >= 0 ? "📈" : "📉", bg: cmp.delta >= 0 ? "var(--amber-100)" : "var(--green-100)", fg: cmp.delta >= 0 ? "#b45309" : "#15803d", delta: `${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)} sul ${cmp.previous_year}` },
-      { label: "Osservazioni", value: insights.length, icon: "💡", bg: "var(--blue-100)", fg: "#1d4ed8", delta: "rilevate per il periodo" },
-    ];
-
-    const cmpTable = cmpRows.length ? `<div class="table-wrap"><table class="data">
-        <thead><tr><th>Categoria</th><th class="num">${year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
-        <tbody>${cmpRows.map(r => `<tr>
-            <td>${esc(r.category)}</td>
-            <td class="num">${eur(r.current)}</td>
-            <td class="num" style="color:var(--text-soft)">${eur(r.previous)}</td>
-            <td class="num">${pctBadge(r.delta_pct)}</td>
-          </tr>`).join("")}</tbody>
-      </table></div>` : `<div class="empty"><div class="big">📭</div><p>Nessun dato da confrontare.</p></div>`;
-
-    c.innerHTML = `
-      ${kpiGrid(kpis)}
-
-      <div class="card card-pad" style="margin-top:16px">
-        <div class="row between" style="margin-bottom:16px"><h3>Osservazioni automatiche</h3><span class="hint">Anno ${year}</span></div>
-        <div class="grid cols-2" style="gap:12px">${insights.map(insightCard).join("")}</div>
-      </div>
-
-      ${monthlyCard(monthly, year, { style: "margin-top:16px" })}
-
-      <div class="grid cols-2" style="margin-top:16px">
-        ${chartCard("Dove spendi di più", barChart(merchRows, { labelKey: "label", valueKey: "total" }), { sub: "Esercenti/fornitori per importo totale" })}
-        ${chartCard(`Confronto ${cmp.previous_year} → ${year}`, cmpTable, { action: `<span class="hint">Variazione per categoria</span>` })}
-      </div>`;
-
-    bindDrills(c);
-  } catch (err) {
-    c.innerHTML = errorBox(err.message);
-  }
-}
-
-/* ---------- View: Esplora (analisi interattiva, cross-filtering BI) ----------
-   Pagina in stile "business intelligence": carica una volta i movimenti di
-   spesa dell'anno e ricava lato client tutti gli aggregati. Cliccando un
-   elemento di QUALSIASI grafico (mese, categoria, pagante, ambito, classifica
-   fiscale) si attiva un filtro a livello di pagina che ricalcola tutti gli
-   altri grafici, i KPI e la tabella (cross-filtering). I filtri attivi
-   compaiono come "slicer" rimovibili. Nessun ricaricamento dal server al
-   variare dei filtri: l'interazione è immediata. */
-let biData = [];          // dataset (movimenti) dell'anno corrente
-let biYear = null;        // anno di riferimento del dataset caricato
-let biFilters = {};       // { month, group, payer, scope, fiscal } → valore (stringa)
+/* ---------- View: Analisi integrata (osservazioni + cross-filtering BI) ------
+   Pagina unica che fonde DUE anime:
+   1) le analisi "narrate" calcolate dal server per l'anno di riferimento
+      (osservazioni automatiche + confronto con l'anno precedente);
+   2) l'esplorazione interattiva in stile "business intelligence": carica una
+      volta i movimenti di spesa e ricava lato client tutti gli aggregati.
+      Cliccando un elemento di QUALSIASI grafico (mese, categoria, pagante,
+      esercente, ambito, classifica fiscale) si attiva un filtro a livello di
+      pagina che ricalcola gli altri grafici, i KPI e la tabella
+      (cross-filtering). I filtri attivi compaiono come "slicer" rimovibili.
+   Le sezioni server (osservazioni/confronto) restano riferite all'anno e non
+   reagiscono ai filtri (sono etichettate con l'anno); il resto è interattivo
+   senza ricaricamenti dal server. */
+let biData = [];          // dataset (movimenti di spesa) caricato
+let biYear = null;        // anno selezionato ("" = tutti gli anni)
+let biRefYear = null;     // anno di riferimento per le sezioni server (osserv./confronto)
+let biInsights = [];      // osservazioni automatiche (server) per biRefYear
+let biCompare = null;     // confronto con l'anno precedente (server) per biRefYear
+let biFilters = {};       // { month, group, payer, merchant, scope, fiscal } → valore (stringa)
 
 // Mappa foglia→macro-categoria (gruppo) costruita dalle categorie note: serve
 // per aggregare i reparti del supermercato sotto la macro-categoria.
@@ -778,6 +733,11 @@ const BI_DIMS = {
     label: "Pagante",
     key: (r) => r.payer_user_id || "",
     text: (k) => (k ? memberName(k) : "Non attribuito"),
+  },
+  merchant: {
+    label: "Esercente",
+    key: (r) => r.merchant || "",
+    text: (k) => (k || "Senza esercente"),
   },
   scope: {
     label: "Ambito",
@@ -834,6 +794,8 @@ function biOpenInExpenses() {
   if (biFilters.month) f.month = String(biFilters.month);
   if (biFilters.group) f.group = biFilters.group;
   if (biFilters.payer) f.payer_user_id = biFilters.payer;
+  // La vista Spese non ha un filtro esercente: usiamo la ricerca testuale.
+  if (biFilters.merchant) f.q = biFilters.merchant;
   if (biFilters.scope) f.scope = biFilters.scope;
   if (biFilters.fiscal) f.fiscal_classification = biFilters.fiscal;
   expFilters = f;
@@ -939,6 +901,50 @@ function biBindClicks(root) {
   root.querySelector("[data-bi-open]")?.addEventListener("click", biOpenInExpenses);
 }
 
+// Mini-statistiche dell'andamento mensile (totale, media sui mesi con spesa,
+// mese di picco) coerenti col grafico a colonne sottostante.
+function biMonthStats(gmap) {
+  const agg = biAggregate("month", gmap);
+  const total = agg.reduce((s, m) => s + m.value, 0);
+  const active = agg.filter(m => Number(m.key) && m.value > 0);
+  const avg = active.length ? total / active.length : 0;
+  const peak = active.reduce((a, m) => (m.value > (a?.value || 0) ? m : a), null);
+  return `<div class="mini-stats">
+      <div><span class="hint">Totale</span><b>${eur(total)}</b></div>
+      <div><span class="hint">Media mensile</span><b>${eur(avg)}</b><span class="hint">${active.length} mes${active.length === 1 ? "e" : "i"} con spesa</span></div>
+      <div><span class="hint">Mese di picco</span><b>${peak ? MONTHS_FULL[Number(peak.key)] : "—"}</b>${peak ? `<span class="hint">${eur(peak.value)}</span>` : ""}</div>
+    </div>`;
+}
+
+// Sezione server (non interattiva): osservazioni automatiche per l'anno di
+// riferimento. Etichettata con l'anno per chiarire che non segue i filtri.
+function biInsightsCard() {
+  if (!biInsights || !biInsights.length) return "";
+  return `<div class="card card-pad" style="margin-top:16px">
+      <div class="row between" style="margin-bottom:16px"><h3>Osservazioni automatiche</h3><span class="hint">Anno ${biRefYear} · non filtrato</span></div>
+      <div class="grid cols-2" style="gap:12px">${biInsights.map(insightCard).join("")}</div>
+    </div>`;
+}
+
+// Sezione server (non interattiva): confronto con l'anno precedente per
+// categoria, con il delta complessivo nell'intestazione.
+function biCompareCard() {
+  if (!biCompare) return "";
+  const cmp = biCompare;
+  const rows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0).slice(0, 12);
+  const head = `<span class="hint">${eur(cmp.current_total)} vs ${eur(cmp.previous_total)} · ${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)}</span> ${pctBadge(cmp.delta_pct)}`;
+  const body = rows.length ? `<div class="table-wrap"><table class="data">
+      <thead><tr><th>Categoria</th><th class="num">${biRefYear}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+          <td>${esc(r.category)}</td>
+          <td class="num">${eur(r.current)}</td>
+          <td class="num" style="color:var(--text-soft)">${eur(r.previous)}</td>
+          <td class="num">${pctBadge(r.delta_pct)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>` : `<div class="empty"><div class="big">📭</div><p>Nessun dato da confrontare.</p></div>`;
+  return chartCard(`Confronto ${cmp.previous_year} → ${biRefYear}`, body, { action: head, style: "margin-top:16px" });
+}
+
 // Ricalcola e ridisegna l'intera pagina dai dati in cache (nessun fetch).
 function biRender() {
   const c = $("#content");
@@ -950,10 +956,11 @@ function biRender() {
   const cats = new Set(filtered.map(r => BI_DIMS.group.key(r, gmap))).size;
   const avg = filtered.length ? total / filtered.length : 0;
   const nFilters = Object.keys(biFilters).length;
+  const periodLabel = biYear || "tutti gli anni";
 
   const kpis = [
     { label: nFilters ? "Spesa filtrata" : (biYear ? `Spesa ${biYear}` : "Spesa totale"), value: eur(total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"} attiv${nFilters === 1 ? "o" : "i"}` : (biYear ? "tutte le spese dell'anno" : "tutte le spese registrate") },
-    { label: "Movimenti", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${biData.length} in totale nell'anno` },
+    { label: "Movimenti", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${biData.length} su ${periodLabel}` },
     { label: "Categorie", value: cats, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "categorie distinte nel filtro" },
     { label: "Media a movimento", value: eur(avg), icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: "importo medio per riga" },
   ];
@@ -976,7 +983,8 @@ function biRender() {
   c.innerHTML = `
     ${biSlicers()}
     ${kpiGrid(kpis)}
-    ${chartCard("Andamento mensile", biMonthChart(gmap), { sub: "Spesa per mese · clicca una colonna per filtrare", style: "margin-top:16px" })}
+    ${biInsightsCard()}
+    ${chartCard(`Andamento mensile ${biYear || ""}`.trim(), biMonthStats(gmap) + biMonthChart(gmap), { sub: "Spesa per mese · clicca una colonna per filtrare la pagina", style: "margin-top:16px" })}
     <div class="grid cols-2" style="margin-top:16px">
       ${chartCard("Spesa per categoria", biBars("group", gmap, { limit: 12 }), { sub: "Clicca una barra per filtrare la pagina" })}
       ${chartCard("Spesa per pagante", biBars("payer", gmap), { sub: "Clicca un pagante per filtrare la pagina" })}
@@ -985,25 +993,37 @@ function biRender() {
       ${chartCard("Personale vs familiare", biDonutChart("scope", gmap))}
       ${chartCard("Classificazione fiscale", biDonutChart("fiscal", gmap))}
     </div>
+    ${chartCard("Dove spendi di più", biBars("merchant", gmap, { limit: 12 }), { sub: "Esercenti/fornitori per importo · clicca per filtrare la pagina", style: "margin-top:16px" })}
+    ${biCompareCard()}
     ${chartCard(`Movimenti ${nFilters ? "filtrati" : (biYear || "Tutti gli anni")}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
 
   biBindClicks(c);
 }
 
-async function viewEsplora() {
+async function viewAnalisi() {
   const c = $("#content");
   c.innerHTML = skeletonGrid();
-  // Il selettore anno richiama viewEsplora() direttamente (non via navigate):
+  // Il selettore anno richiama viewAnalisi() direttamente (non via navigate):
   // svuota la topbar per non accumulare selettori duplicati al cambio anno.
   $("#topbar-actions").innerHTML = "";
-  $("#topbar-actions").appendChild(await yearSelector(viewEsplora));
+  $("#topbar-actions").appendChild(await yearSelector(viewAnalisi));
   // L'esplorazione segue il selettore anno: con "Tutti gli anni" (biYear vuoto)
-  // carichiamo i movimenti di tutti gli anni (fiscal_year omesso lato API).
+  // carichiamo i movimenti di tutti gli anni (fiscal_year omesso lato API). Le
+  // sezioni server (osservazioni/confronto) sono per anno: usano l'anno
+  // selezionato o, in modalità "tutti gli anni", quello corrente.
   biYear = State.year || "";
+  biRefYear = biYear || new Date().getFullYear();
   try {
-    biData = await api(biYear ? `/expenses?fiscal_year=${biYear}` : "/expenses");
+    const [expenses, insights, compare] = await Promise.all([
+      api(biYear ? `/expenses?fiscal_year=${biYear}` : "/expenses"),
+      api(`/stats/insights?year=${biRefYear}`).catch(() => []),
+      api(`/stats/compare?year=${biRefYear}`).catch(() => null),
+    ]);
+    biData = expenses;
+    biInsights = insights || [];
+    biCompare = compare;
     if (!biData.length) {
-      c.innerHTML = emptyBox("🧭", "Nessuna spesa da esplorare", `Non ci sono movimenti ${biYear ? "per il " + biYear : "registrati"}. Carica documenti o registra spese, poi torna qui per l'analisi interattiva.`, "Carica documento", "upload");
+      c.innerHTML = emptyBox("📈", "Niente da analizzare", `Non ci sono movimenti di spesa ${biYear ? "per il " + biYear : "registrati"}. Carica documenti o registra spese, poi torna qui per le osservazioni e l'analisi interattiva.`, "Carica documento", "upload");
       bindEmpty(c);
       return;
     }
