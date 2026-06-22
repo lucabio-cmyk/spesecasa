@@ -27,34 +27,53 @@ def cached_system(text: str):
     return [{"type": "text", "text": text, "cache_control": dict(_EPHEMERAL)}]
 
 
-def _mark_last_block(message: dict) -> None:
+def _mark_last_block(message: dict) -> dict:
+    """Restituisce una COPIA del messaggio con `cache_control` sull'ultimo blocco
+    (convertendo l'eventuale contenuto stringa in un blocco testo). Copia-su-scrittura:
+    non muta né il dict, né la lista `content`, né i blocchi originali — importante
+    perché in chat la cronologia è condivisa per riferimento con il chiamante."""
     content = message.get("content")
     if isinstance(content, str):
         if not content:
-            return
+            return message
         content = [{"type": "text", "text": content}]
-        message["content"] = content
-    if isinstance(content, list) and content and isinstance(content[-1], dict):
-        content[-1]["cache_control"] = dict(_EPHEMERAL)
+    elif isinstance(content, list):
+        content = list(content)
+    else:
+        return message
+    if content and isinstance(content[-1], dict):
+        content[-1] = {**content[-1], "cache_control": dict(_EPHEMERAL)}
+    return {**message, "content": content}
 
 
 def mark_messages_cache(messages: list[dict]) -> None:
-    """Posiziona i breakpoint di cache sulla cronologia, in place.
+    """Posiziona i breakpoint di cache sulla cronologia, aggiornando in place la
+    lista `messages` (i singoli messaggi vengono sostituiti con copie, mai mutati).
 
     Prima ripulisce eventuali breakpoint precedenti (così non si superano i 4 per
     richiesta), poi marca l'ultimo blocco del PRIMO messaggio — pinna il contesto
     iniziale, tipicamente il file base64 dell'upload — e dell'ULTIMO messaggio —
     breakpoint mobile che fa riusare dalla cache la cronologia che cresce ad ogni
     iterazione del loop. I blocchi del turno assistant sono oggetti dell'SDK (non
-    dict) e vengono ignorati senza errori."""
+    dict) e vengono ignorati senza errori. Copia-su-scrittura: non muta gli oggetti
+    originali, che in chat sono condivisi con la cronologia del chiamante."""
     if not settings.enable_prompt_caching or not messages:
         return
-    for m in messages:
+    for i, m in enumerate(messages):
         content = m.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    block.pop("cache_control", None)
-    # dict per de-duplicare quando primo e ultimo messaggio coincidono.
-    for m in {id(messages[0]): messages[0], id(messages[-1]): messages[-1]}.values():
-        _mark_last_block(m)
+        if not isinstance(content, list):
+            continue
+        if any(isinstance(b, dict) and "cache_control" in b for b in content):
+            messages[i] = {
+                **m,
+                "content": [
+                    {k: v for k, v in b.items() if k != "cache_control"}
+                    if isinstance(b, dict)
+                    else b
+                    for b in content
+                ],
+            }
+    messages[0] = _mark_last_block(messages[0])
+    if len(messages) > 1:
+        messages[-1] = _mark_last_block(messages[-1])
+
