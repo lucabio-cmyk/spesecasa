@@ -348,6 +348,7 @@ function renderAuth(mode = "login") {
 const NAV = [
   { id: "dashboard", icon: "📊", label: "Dashboard" },
   { id: "analisi", icon: "📈", label: "Analisi" },
+  { id: "esplora", icon: "🧭", label: "Esplora" },
   { id: "upload", icon: "⬆️", label: "Carica documento" },
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "revisione", icon: "🔍", label: "Revisione" },
@@ -419,6 +420,7 @@ function navigate(view) {
   const titles = {
     dashboard: ["Dashboard", "Panoramica delle spese e dei documenti del nucleo"],
     analisi: ["Analisi", "Andamento mensile, esercenti, confronto tra anni e osservazioni automatiche"],
+    esplora: ["Esplora", "Analisi interattiva delle spese: clicca i grafici per filtrare tutta la pagina (stile BI)"],
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
@@ -433,7 +435,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, esplora: viewEsplora, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -731,6 +733,281 @@ async function viewAnalisi() {
       </div>`;
 
     bindDrills(c);
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
+}
+
+/* ---------- View: Esplora (analisi interattiva, cross-filtering BI) ----------
+   Pagina in stile "business intelligence": carica una volta i movimenti di
+   spesa dell'anno e ricava lato client tutti gli aggregati. Cliccando un
+   elemento di QUALSIASI grafico (mese, categoria, pagante, ambito, classifica
+   fiscale) si attiva un filtro a livello di pagina che ricalcola tutti gli
+   altri grafici, i KPI e la tabella (cross-filtering). I filtri attivi
+   compaiono come "slicer" rimovibili. Nessun ricaricamento dal server al
+   variare dei filtri: l'interazione è immediata. */
+let biData = [];          // dataset (movimenti) dell'anno corrente
+let biYear = null;        // anno di riferimento del dataset caricato
+let biFilters = {};       // { month, group, payer, scope, fiscal } → valore (stringa)
+
+// Mappa foglia→macro-categoria (gruppo) costruita dalle categorie note: serve
+// per aggregare i reparti del supermercato sotto la macro-categoria.
+function biGroupMap() {
+  const cats = (State.categories && State.categories.length) ? State.categories : BUILTIN_CATEGORIES;
+  const m = {};
+  for (const c of cats) m[c.name] = c.parent || c.name;
+  return m;
+}
+
+// Dimensioni del cubo: ognuna sa estrarre la chiave da una riga e darne
+// l'etichetta leggibile. La chiave è confrontata (come stringa) col filtro.
+const BI_DIMS = {
+  month: {
+    label: "Mese",
+    // Estrae il mese dalla stringa ISO (YYYY-MM-DD) senza passare da Date():
+    // evita lo slittamento di giorno/mese nei fusi con offset negativo.
+    key: (r) => r.purchase_date ? parseInt(String(r.purchase_date).split("-")[1], 10) : 0,
+    text: (k) => (Number(k) ? MONTHS_FULL[Number(k)] : "Senza data"),
+  },
+  group: {
+    label: "Categoria",
+    key: (r, g) => r.merch_category ? (g[r.merch_category] || r.merch_category) : "n/d",
+    text: (k) => (k === "n/d" ? "Senza categoria" : k),
+  },
+  payer: {
+    label: "Pagante",
+    key: (r) => r.payer_user_id || "",
+    text: (k) => (k ? memberName(k) : "Non attribuito"),
+  },
+  scope: {
+    label: "Ambito",
+    key: (r) => r.scope || "",
+    text: (k) => (SCOPE_LABELS[k] || k || "—"),
+  },
+  fiscal: {
+    label: "Fiscale",
+    key: (r) => r.fiscal_classification || "",
+    text: (k) => (FISCAL_LABELS[k] || k || "—"),
+  },
+};
+
+// Una riga supera i filtri attivi tranne quello sulla dimensione `except`
+// (cross-filtering "escludi te stesso": il grafico cliccato continua a
+// mostrare tutte le voci, evidenziando quella selezionata).
+function biMatches(row, gmap, except) {
+  for (const dim of Object.keys(biFilters)) {
+    if (dim === except) continue;
+    if (String(BI_DIMS[dim].key(row, gmap)) !== String(biFilters[dim])) return false;
+  }
+  return true;
+}
+
+// Aggrega per la dimensione `dim` le righe filtrate (escludendo il filtro su
+// `dim`), restituendo righe {key,label,value,count} ordinate.
+function biAggregate(dim, gmap) {
+  const D = BI_DIMS[dim];
+  const map = new Map();
+  for (const r of biData) {
+    if (!biMatches(r, gmap, dim)) continue;
+    const k = String(D.key(r, gmap));
+    let e = map.get(k);
+    if (!e) { e = { key: k, label: D.text(k), value: 0, count: 0 }; map.set(k, e); }
+    e.value += Number(r.line_amount || 0);
+    e.count++;
+  }
+  const out = [...map.values()];
+  if (dim === "month") out.sort((a, b) => Number(a.key) - Number(b.key));
+  else out.sort((a, b) => b.value - a.value);
+  return out;
+}
+
+function biToggle(dim, val) {
+  if (String(biFilters[dim]) === String(val)) delete biFilters[dim];
+  else biFilters[dim] = String(val);
+  biRender();
+}
+
+// Porta i filtri attivi nella vista Spese (per modificare i movimenti).
+function biOpenInExpenses() {
+  const f = defaultExpFilters();
+  f.fiscal_year = biYear ? String(biYear) : "";
+  if (biFilters.month) f.month = String(biFilters.month);
+  if (biFilters.group) f.group = biFilters.group;
+  if (biFilters.payer) f.payer_user_id = biFilters.payer;
+  if (biFilters.scope) f.scope = biFilters.scope;
+  if (biFilters.fiscal) f.fiscal_classification = biFilters.fiscal;
+  expFilters = f;
+  navigate("expenses");
+}
+
+// Barre orizzontali selezionabili (toggle del filtro, non navigazione).
+function biBars(dim, gmap, { limit = 0 } = {}) {
+  let rows = biAggregate(dim, gmap);
+  if (limit && rows.length > limit) rows = rows.slice(0, limit);
+  if (!rows.length) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
+  const sel = biFilters[dim];
+  const max = Math.max(...rows.map(r => r.value), 1);
+  return rows.map((r, i) => {
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<div class="bar-row bar-clickable bi-bar${cls}" data-bi-dim="${dim}" data-bi-val="${esc(r.key)}" role="button" tabindex="0" title="${esc(r.label)} · ${eur(r.value)}">
+        <span class="lbl">${esc(r.label)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (r.value / max) * 100)}%;background:${PALETTE[i % PALETTE.length]}"></div></div>
+        <span class="amt">${eur(r.value)}</span>
+      </div>`;
+  }).join("");
+}
+
+// Ciambella selezionabile (per le dimensioni a poche voci: ambito/fiscale).
+function biDonutChart(dim, gmap) {
+  const rows = biAggregate(dim, gmap);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  if (!total) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
+  const sel = biFilters[dim];
+  const R = 70, C = 2 * Math.PI * R; let off = 0;
+  const segs = rows.map((r, i) => {
+    const frac = r.value / total;
+    const dash = `${frac * C} ${C - frac * C}`;
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    const seg = `<circle class="seg-clickable bi-seg${cls}" data-bi-dim="${dim}" data-bi-val="${esc(r.key)}" r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"></circle>`;
+    off += frac; return seg;
+  }).join("");
+  const legend = rows.map((r, i) => {
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<span class="leg-clickable bi-leg${cls}" data-bi-dim="${dim}" data-bi-val="${esc(r.key)}" role="button" tabindex="0"><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r.label)} · <b>${eur(r.value)}</b></span>`;
+  }).join("");
+  return `<div class="donut-wrap">
+    <svg viewBox="0 0 180 180" width="180" height="180" style="flex-shrink:0">${segs}
+      <text x="90" y="84" text-anchor="middle" font-size="13" fill="var(--text-faint)">Totale</text>
+      <text x="90" y="104" text-anchor="middle" font-size="17" font-weight="800" fill="var(--text)">${eur(total)}</text>
+    </svg>
+    <div class="legend" style="flex-direction:column;gap:8px">${legend}</div></div>`;
+}
+
+// Colonne mensili selezionabili (gen→dic), con i mesi assenti mostrati a zero.
+function biMonthChart(gmap) {
+  const agg = biAggregate("month", gmap);
+  const byKey = Object.fromEntries(agg.map(r => [r.key, r]));
+  const sel = biFilters.month;
+  const months = Array.from({ length: 12 }, (_, i) => byKey[String(i + 1)] || { key: String(i + 1), value: 0, count: 0 });
+  const max = Math.max(...months.map(m => m.value), 1);
+  const cols = months.map((m, i) => {
+    const h = Math.max(0, (m.value / max) * 100);
+    const isSel = sel !== undefined && String(sel) === m.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<div class="col-item col-clickable bi-col${cls}" data-bi-dim="month" data-bi-val="${m.key}" role="button" tabindex="0" title="${MONTHS_FULL[i + 1]}: ${eur(m.value)}">
+        <div class="col-bars">
+          <div class="col-amt">${eurShort(m.value)}</div>
+          <div class="col-stack"><div class="col-seg" style="height:${h}%;background:${COL_EXP_COLOR}"></div></div>
+        </div>
+        <div class="col-lbl">${MONTHS_FULL[i + 1].slice(0, 3)}</div>
+      </div>`;
+  }).join("");
+  return `<div class="col-chart">${cols}</div>`;
+}
+
+// Barra degli slicer: filtri attivi come chip rimovibili + azzera tutto.
+function biSlicers() {
+  const keys = Object.keys(biFilters);
+  if (!keys.length) {
+    return `<div class="slicers"><span class="hint">💡 Clicca su una barra, una colonna o uno spicchio per filtrare tutta la pagina. I filtri si combinano.</span></div>`;
+  }
+  const chips = keys.map(dim => {
+    const D = BI_DIMS[dim];
+    return `<span class="slicer-chip"><span class="dim-lbl">${esc(D.label)}</span>${esc(D.text(biFilters[dim]))}<span class="x" data-bi-remove="${dim}" role="button" tabindex="0" title="Rimuovi filtro">✕</span></span>`;
+  }).join("");
+  return `<div class="slicers">${chips}
+      <button class="btn btn-ghost btn-sm" data-bi-clear>Azzera filtri</button>
+      <button class="btn btn-ghost btn-sm" data-bi-open>Apri nelle Spese ↗</button>
+    </div>`;
+}
+
+function biBindClicks(root) {
+  root.querySelectorAll("[data-bi-dim][data-bi-val]").forEach(el => {
+    const fire = () => biToggle(el.dataset.biDim, el.dataset.biVal);
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+  root.querySelectorAll("[data-bi-remove]").forEach(el => {
+    const fire = () => { delete biFilters[el.dataset.biRemove]; biRender(); };
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+  root.querySelector("[data-bi-clear]")?.addEventListener("click", () => { biFilters = {}; biRender(); });
+  root.querySelector("[data-bi-open]")?.addEventListener("click", biOpenInExpenses);
+}
+
+// Ricalcola e ridisegna l'intera pagina dai dati in cache (nessun fetch).
+function biRender() {
+  const c = $("#content");
+  if (!c) return;
+  const gmap = biGroupMap();
+  // Righe che passano TUTTI i filtri attivi: alimentano KPI e tabella.
+  const filtered = biData.filter(r => biMatches(r, gmap, null));
+  const total = filtered.reduce((s, r) => s + Number(r.line_amount || 0), 0);
+  const cats = new Set(filtered.map(r => BI_DIMS.group.key(r, gmap))).size;
+  const avg = filtered.length ? total / filtered.length : 0;
+  const nFilters = Object.keys(biFilters).length;
+
+  const kpis = [
+    { label: nFilters ? "Spesa filtrata" : (biYear ? `Spesa ${biYear}` : "Spesa totale"), value: eur(total), icon: "💶", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"} attiv${nFilters === 1 ? "o" : "i"}` : (biYear ? "tutte le spese dell'anno" : "tutte le spese registrate") },
+    { label: "Movimenti", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `${biData.length} in totale nell'anno` },
+    { label: "Categorie", value: cats, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "categorie distinte nel filtro" },
+    { label: "Media a movimento", value: eur(avg), icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: "importo medio per riga" },
+  ];
+
+  // Tabella dei movimenti filtrati (sola lettura: per modificarli c'è "Spese").
+  const rows = filtered.slice().sort((a, b) => (b.purchase_date || "").localeCompare(a.purchase_date || ""));
+  const tableRows = rows.slice(0, 200);
+  const table = filtered.length ? `<div class="table-wrap"><table class="data">
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Categoria</th><th>Pagante</th><th class="num">Importo</th></tr></thead>
+      <tbody>${tableRows.map(r => `<tr>
+          <td class="mono">${fmtDate(r.purchase_date)}</td>
+          <td><b>${esc(r.description_normalized || r.description_original || "—")}</b>${r.merchant ? `<div class="hint">${esc(r.merchant)}</div>` : ""}</td>
+          <td>${esc(r.merch_category || "—")}</td>
+          <td>${esc(r.payer_user_id ? memberName(r.payer_user_id) : "Non attribuito")}</td>
+          <td class="num">${eur(r.line_amount)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>${rows.length > tableRows.length ? `<p class="hint" style="margin-top:10px">Mostrati i primi ${tableRows.length} di ${rows.length} movimenti. Restringi i filtri o apri la vista Spese.</p>` : ""}`
+    : `<div class="empty"><div class="big">📭</div><p>Nessun movimento per i filtri selezionati.</p></div>`;
+
+  c.innerHTML = `
+    ${biSlicers()}
+    ${kpiGrid(kpis)}
+    ${chartCard("Andamento mensile", biMonthChart(gmap), { sub: "Spesa per mese · clicca una colonna per filtrare", style: "margin-top:16px" })}
+    <div class="grid cols-2" style="margin-top:16px">
+      ${chartCard("Spesa per categoria", biBars("group", gmap, { limit: 12 }), { sub: "Clicca una barra per filtrare la pagina" })}
+      ${chartCard("Spesa per pagante", biBars("payer", gmap), { sub: "Clicca un pagante per filtrare la pagina" })}
+    </div>
+    <div class="grid cols-2" style="margin-top:16px">
+      ${chartCard("Personale vs familiare", biDonutChart("scope", gmap))}
+      ${chartCard("Classificazione fiscale", biDonutChart("fiscal", gmap))}
+    </div>
+    ${chartCard(`Movimenti ${nFilters ? "filtrati" : (biYear || "Tutti gli anni")}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
+
+  biBindClicks(c);
+}
+
+async function viewEsplora() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  // Il selettore anno richiama viewEsplora() direttamente (non via navigate):
+  // svuota la topbar per non accumulare selettori duplicati al cambio anno.
+  $("#topbar-actions").innerHTML = "";
+  $("#topbar-actions").appendChild(await yearSelector(viewEsplora));
+  // L'esplorazione segue il selettore anno: con "Tutti gli anni" (biYear vuoto)
+  // carichiamo i movimenti di tutti gli anni (fiscal_year omesso lato API).
+  biYear = State.year || "";
+  try {
+    biData = await api(biYear ? `/expenses?fiscal_year=${biYear}` : "/expenses");
+    if (!biData.length) {
+      c.innerHTML = emptyBox("🧭", "Nessuna spesa da esplorare", `Non ci sono movimenti ${biYear ? "per il " + biYear : "registrati"}. Carica documenti o registra spese, poi torna qui per l'analisi interattiva.`, "Carica documento", "upload");
+      bindEmpty(c);
+      return;
+    }
+    biRender();
   } catch (err) {
     c.innerHTML = errorBox(err.message);
   }

@@ -266,6 +266,26 @@ table.data tbody tr:hover { background: var(--surface-2); }
 .col-clickable:hover .col-stack { filter: brightness(1.08); }
 .col-clickable:hover .col-lbl { color: var(--brand); font-weight: 600; }
 
+/* ---------- Esplora (cross-filtering BI) ---------- */
+/* Stati di selezione: la voce filtrata è evidenziata, le altre attenuate. */
+.bi-bar.sel .bar-track { box-shadow: 0 0 0 2px var(--brand); }
+.bi-bar.sel .lbl { color: var(--text); font-weight: 700; }
+.bi-bar.dim { opacity: .42; }
+.bi-bar.dim:hover { opacity: 1; }
+.bi-col.sel .col-stack { box-shadow: 0 0 0 2px var(--brand); }
+.bi-col.sel .col-lbl { color: var(--brand); font-weight: 700; }
+.bi-col.dim { opacity: .42; }
+.bi-col.dim:hover { opacity: 1; }
+.bi-seg.dim { opacity: .3; }
+.bi-leg.sel { color: var(--text); font-weight: 700; }
+.bi-leg.dim { opacity: .45; }
+/* Barra degli slicer (filtri attivi) */
+.slicers { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; min-height: 34px; }
+.slicer-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--brand); color: #fff; padding: 6px 8px 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600; }
+.slicer-chip .dim-lbl { opacity: .8; font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.slicer-chip .x { cursor: pointer; font-weight: 800; opacity: .85; padding: 0 3px; border-radius: 50%; }
+.slicer-chip .x:hover { opacity: 1; background: rgba(255,255,255,.22); }
+
 /* Mini-statistiche sopra il grafico mensile */
 .mini-stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
 .mini-stats > div { flex: 1; min-width: 120px; display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; background: var(--surface-2); border-radius: 10px; }
