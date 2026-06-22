@@ -905,8 +905,10 @@ function biBindClicks(root) {
 // mese di picco) coerenti col grafico a colonne sottostante.
 function biMonthStats(gmap) {
   const agg = biAggregate("month", gmap);
-  const total = agg.reduce((s, m) => s + m.value, 0);
+  // Solo i 12 mesi reali (esclude la chiave "0" = movimenti senza data, che il
+  // grafico non mostra): così totale/media coincidono con le colonne.
   const active = agg.filter(m => Number(m.key) && m.value > 0);
+  const total = active.reduce((s, m) => s + m.value, 0);
   const avg = active.length ? total / active.length : 0;
   const peak = active.reduce((a, m) => (m.value > (a?.value || 0) ? m : a), null);
   return `<div class="mini-stats">
