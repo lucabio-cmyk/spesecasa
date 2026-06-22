@@ -50,14 +50,16 @@ async def list_expenses(
         stmt = stmt.where(Expense.merch_category == category)
     # Filtro per macro-categoria (gruppo): include tutte le foglie del gruppo
     # (es. tutte le voci di reparto sotto «spesa supermercato»). Alimenta il
-    # drill-down dalla vista "Spesa per categoria" della dashboard.
+    # drill-down dalla vista "Spesa per categoria" della dashboard. Normalizziamo
+    # il valore: le chiavi di `leaf_group` sono normalizzate (minuscolo/trim).
     if group:
+        norm_group = categories_service.normalize_name(group)
         leaf_group = await categories_service.leaf_to_group(db, user.household_id)
-        leaves = [leaf for leaf, grp in leaf_group.items() if grp == group]
+        leaves = [leaf for leaf, grp in leaf_group.items() if grp == norm_group]
         if leaves:
             stmt = stmt.where(Expense.merch_category.in_(leaves))
         else:
-            stmt = stmt.where(Expense.merch_category == group)
+            stmt = stmt.where(Expense.merch_category == norm_group)
     if scope:
         stmt = stmt.where(Expense.scope == scope)
     if fiscal_classification:

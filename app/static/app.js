@@ -1765,11 +1765,11 @@ function openUnitForm(unit = null) {
 
 function openCategoryForm(category = null) {
   const cat = category || {};
-  // Gruppi (macro-categorie) disponibili: quelli noti in State + il supermercato.
-  const groupNames = [...new Set([
-    SUPERMARKET_GROUP,
-    ...(State.categories || []).map(c => c.parent).filter(Boolean),
-  ])];
+  // Gruppi (macro-categorie) disponibili: solo quelli di BASE — le categorie
+  // personalizzate sono macro-categorie di primo livello (niente gruppi custom).
+  const baseCats = (State.categories || []).filter(c => c.builtin).length ? State.categories.filter(c => c.builtin) : BUILTIN_CATEGORIES;
+  const groupNames = [...new Set(baseCats.map(c => c.parent).filter(Boolean))];
+  if (!groupNames.length) groupNames.push(SUPERMARKET_GROUP);
   const groupOpts = { "": "Nessuno (categoria di primo livello)", ...Object.fromEntries(groupNames.map(g => [g, g])) };
   openModal(`
     <div class="modal-head"><h3>${category ? "Modifica categoria" : "Nuova categoria merceologica"}</h3><button class="btn-icon" data-close>✕</button></div>

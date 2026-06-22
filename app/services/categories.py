@@ -118,15 +118,6 @@ async def known_names(db: AsyncSession, household_id: uuid.UUID) -> set[str]:
     return set(_BUILTIN_NAMES) | {c.name for c in customs}
 
 
-async def known_groups(db: AsyncSession, household_id: uuid.UUID) -> set[str]:
-    """Macro-categorie note al nucleo: i gruppi di base più i `parent` usati
-    dalle categorie personalizzate (così l'agente può riusarli)."""
-    customs = await list_custom(db, household_id)
-    groups = set(_BUILTIN_GROUPS)
-    groups.update(c.parent for c in customs if c.parent)
-    return groups
-
-
 async def leaf_to_group(db: AsyncSession, household_id: uuid.UUID) -> dict[str, str]:
     """Mappa categoria-foglia → macro-categoria (gruppo) per il roll-up nelle
     statistiche. Le foglie senza padre (es. 'farmaci' o le macro personalizzate)

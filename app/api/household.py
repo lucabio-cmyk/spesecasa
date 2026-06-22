@@ -281,15 +281,11 @@ async def list_categories(user: CurrentUser, db: DB):
 
 @router.get("/category-groups", response_model=list[dict])
 async def list_category_groups(user: CurrentUser, db: DB):
-    """Macro-categorie (gruppi) note al nucleo: i gruppi di base più gli
-    eventuali gruppi delle categorie personalizzate. Usate dalla GUI per
-    collocare una categoria nella gerarchia."""
-    base = categories_service.builtin_groups()
-    base_names = {g["name"] for g in base}
-    extra = await categories_service.known_groups(db, user.household_id)
-    for name in sorted(extra - base_names):
-        base.append({"name": name, "description": None})
-    return base
+    """Macro-categorie (gruppi) sotto cui si possono collocare le categorie.
+    Usate dalla GUI per la gerarchia. Al momento i gruppi sono solo quelli di
+    base (di fatto «spesa supermercato»): le categorie personalizzate sono
+    macro-categorie di primo livello."""
+    return categories_service.builtin_groups()
 
 
 @router.post("/categories", response_model=CategoryOut, status_code=201)
