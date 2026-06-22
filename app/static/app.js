@@ -75,6 +75,14 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const app = () => $("#app");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const eur = (n) => (Number(n) || 0).toLocaleString("it-IT", { style: "currency", currency: "EUR" });
+// Importo compatto per le etichette fitte (es. cime delle colonne mensili): "€1,2k".
+const eurShort = (n) => {
+  const v = Number(n) || 0;
+  if (!v) return "";
+  if (Math.abs(v) >= 1000) return "€" + (v / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 }) + "k";
+  return "€" + v.toLocaleString("it-IT", { maximumFractionDigits: 0 });
+};
+const MONTHS_FULL = ["", "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"];
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString("it-IT", { day: "2-digit", month: "short", year: "numeric" }) : "—";
 const initials = (name) => (name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase();
 const memberName = (id) => id ? (State.membersById[id]?.full_name || "—") : "—";
@@ -484,16 +492,68 @@ function chartCard(title, body, { action = "", sub = "", style = "" } = {}) {
     </div>`;
 }
 
+// Grafico a colonne verticali per l'andamento mensile: ogni colonna è impilata
+// (spese in basso + bollette in alto) e, se ha una drill spec, è cliccabile.
+const COL_EXP_COLOR = "#0d9488", COL_BILL_COLOR = "#f59e0b";
+function columnChart(rows) {
+  if (!rows.some(r => r.total > 0)) return `<div class="empty"><div class="big">📭</div><p>Nessun movimento per il periodo selezionato.</p></div>`;
+  const max = Math.max(...rows.map(r => r.total), 1);
+  const cols = rows.map(r => {
+    const eH = Math.max(0, (r.expenses / max) * 100), bH = Math.max(0, (r.bills / max) * 100);
+    const tip = `${esc(r.full || r.label)}: ${eur(r.total)}` + (r.bills ? ` · spese ${eur(r.expenses)}, bollette ${eur(r.bills)}` : "");
+    return `<div class="col-item${r.drill ? " col-clickable" : ""}"${drillAttr(r.drill)} title="${tip}">
+        <div class="col-bars">
+          <div class="col-amt">${eurShort(r.total)}</div>
+          <div class="col-stack">
+            <div class="col-seg" style="height:${bH}%;background:${COL_BILL_COLOR}"></div>
+            <div class="col-seg" style="height:${eH}%;background:${COL_EXP_COLOR}"></div>
+          </div>
+        </div>
+        <div class="col-lbl">${esc(r.label)}</div>
+      </div>`;
+  }).join("");
+  const legend = `<div class="legend" style="margin-top:16px">
+      <span><i class="dot" style="background:${COL_EXP_COLOR}"></i>Spese</span>
+      <span><i class="dot" style="background:${COL_BILL_COLOR}"></i>Bollette</span>
+    </div>`;
+  return `<div class="col-chart">${cols}</div>${legend}`;
+}
+
+// Card "Andamento mensile" con mini-statistiche (totale, media, picco) + colonne.
+function monthlyCard(monthly, year, { drillYear = true, style = "" } = {}) {
+  const active = monthly.filter(m => m.total > 0);
+  const total = monthly.reduce((s, m) => s + m.total, 0);
+  const avg = active.length ? total / active.length : 0;
+  const peak = active.reduce((a, m) => (m.total > (a?.total || 0) ? m : a), null);
+  const yBase = year ? { fiscal_year: String(year) } : {};
+  const rows = monthly.map(m => ({
+    label: m.label, full: MONTHS_FULL[m.month], total: m.total,
+    expenses: m.expenses_total, bills: m.bills_total,
+    drill: drillYear && m.total > 0 ? { view: "expenses", expenses: { ...yBase, month: String(m.month) } } : null,
+  }));
+  const stats = `<div class="mini-stats">
+      <div><span class="hint">Totale</span><b>${eur(total)}</b></div>
+      <div><span class="hint">Media mensile</span><b>${eur(avg)}</b><span class="hint">${active.length} mes${active.length === 1 ? "e" : "i"} con spesa</span></div>
+      <div><span class="hint">Mese di picco</span><b>${peak ? MONTHS_FULL[peak.month] : "—"}</b>${peak ? `<span class="hint">${eur(peak.total)}</span>` : ""}</div>
+    </div>`;
+  return chartCard(`Andamento mensile ${year}`, stats + columnChart(rows), {
+    sub: "Spese e bollette mese per mese · clicca una colonna per i movimenti", style,
+  });
+}
+
 /* ---------- View: Dashboard ---------- */
 async function viewDashboard() {
   const c = $("#content");
   c.innerHTML = skeletonGrid();
   $("#topbar-actions").appendChild(await yearSelector(viewDashboard));
   const yq = State.year ? `?year=${State.year}` : "";
+  // L'andamento mensile è per anno: senza anno selezionato usiamo quello corrente.
+  const dashYear = State.year || new Date().getFullYear();
   try {
-    const [ov, byCat, byMember, byScope, fiscal, yearly] = await Promise.all([
+    const [ov, byCat, byMember, byScope, fiscal, yearly, monthly] = await Promise.all([
       api(`/stats/overview${yq}`), api(`/stats/by-category${yq}`), api(`/stats/by-member${yq}`),
       api(`/stats/by-scope${yq}`), api(`/stats/fiscal-summary${yq}`), api(`/stats/yearly`),
+      api(`/stats/monthly?year=${dashYear}`),
     ]);
     refreshReviewBadge();
 
@@ -538,6 +598,8 @@ async function viewDashboard() {
         ${chartCard("Spesa per categoria", barChart(catRows, { labelKey: "label", valueKey: "total" }))}
         ${chartCard("Classificazione fiscale", donut(fiscalRows, { labelKey: "label", valueKey: "total" }))}
       </div>
+
+      ${monthlyCard(monthly, dashYear, { style: "margin-top:16px" })}
 
       <div class="grid cols-2" style="margin-top:16px">
         ${chartCard("Spesa per membro (pagante)", barChart(memberRows, { labelKey: "label", valueKey: "total" }))}
@@ -590,7 +652,6 @@ async function viewAnalisi() {
       api(`/stats/compare${yq}`),
     ]);
 
-    const monthRows = monthly.map(m => ({ label: m.label, total: m.total }));
     const merchRows = top.map(m => ({ label: m.merchant, total: m.total }));
     const cmpRows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0).slice(0, 12);
 
@@ -619,12 +680,14 @@ async function viewAnalisi() {
         <div class="grid cols-2" style="gap:12px">${insights.map(insightCard).join("")}</div>
       </div>
 
-      <div class="grid cols-2" style="margin-top:16px">
-        ${chartCard(`Andamento mensile ${year}`, barChart(monthRows, { labelKey: "label", valueKey: "total" }), { sub: "Spese + bollette per mese" })}
-        ${chartCard("Dove spendi di più", barChart(merchRows, { labelKey: "label", valueKey: "total" }), { sub: "Esercenti/fornitori per importo totale" })}
-      </div>
+      ${monthlyCard(monthly, year, { style: "margin-top:16px" })}
 
-      ${chartCard(`Confronto ${cmp.previous_year} → ${year}`, cmpTable, { action: `<span class="hint">Variazione per categoria</span>`, style: "margin-top:16px" })}`;
+      <div class="grid cols-2" style="margin-top:16px">
+        ${chartCard("Dove spendi di più", barChart(merchRows, { labelKey: "label", valueKey: "total" }), { sub: "Esercenti/fornitori per importo totale" })}
+        ${chartCard(`Confronto ${cmp.previous_year} → ${year}`, cmpTable, { action: `<span class="hint">Variazione per categoria</span>` })}
+      </div>`;
+
+    bindDrills(c);
   } catch (err) {
     c.innerHTML = errorBox(err.message);
   }
@@ -1079,7 +1142,8 @@ async function runReview(btn) {
 }
 
 /* ---------- View: Expenses ---------- */
-const defaultExpFilters = () => ({ fiscal_year: "", category: "", scope: "", fiscal_classification: "", payer_user_id: "", q: "" });
+const defaultExpFilters = () => ({ fiscal_year: "", month: "", category: "", scope: "", fiscal_classification: "", payer_user_id: "", q: "" });
+const MONTH_OPTS = { "": "Tutti i mesi", ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i + 1), MONTHS_FULL[i + 1]])) };
 let expFilters = defaultExpFilters();
 async function viewExpenses() {
   const c = $("#content");
@@ -1092,6 +1156,7 @@ async function viewExpenses() {
       <select class="select" id="ef-scope">${optList({ "": "Tutti gli ambiti", ...SCOPE_LABELS }, expFilters.scope)}</select>
       <select class="select" id="ef-payer">${optList({ "": "Tutti i paganti", ...memberOpts }, expFilters.payer_user_id)}</select>
       <input class="input" id="ef-year" type="number" placeholder="Anno" style="width:110px" value="${esc(expFilters.fiscal_year)}">
+      <select class="select" id="ef-month">${optList(MONTH_OPTS, expFilters.month)}</select>
       <button class="btn btn-ghost btn-sm" id="exp-reset">Azzera</button>
     </div>
     <div id="exp-list">${skeletonRows()}</div>`;
@@ -1102,6 +1167,7 @@ async function viewExpenses() {
   $("#ef-scope").addEventListener("change", (e) => { expFilters.scope = e.target.value; loadExpenses(); });
   $("#ef-payer").addEventListener("change", (e) => { expFilters.payer_user_id = e.target.value; loadExpenses(); });
   $("#ef-year").addEventListener("input", (e) => { expFilters.fiscal_year = e.target.value; reload(); });
+  $("#ef-month").addEventListener("change", (e) => { expFilters.month = e.target.value; loadExpenses(); });
   $("#exp-reset").addEventListener("click", () => { expFilters = defaultExpFilters(); viewExpenses(); });
   loadExpenses();
 }
@@ -1110,6 +1176,7 @@ async function loadExpenses() {
   const wrap = $("#exp-list"); if (!wrap) return;
   const p = new URLSearchParams();
   if (expFilters.fiscal_year) p.set("fiscal_year", expFilters.fiscal_year);
+  if (expFilters.month) p.set("month", expFilters.month);
   if (expFilters.category) p.set("category", expFilters.category);
   if (expFilters.scope) p.set("scope", expFilters.scope);
   if (expFilters.fiscal_classification) p.set("fiscal_classification", expFilters.fiscal_classification);

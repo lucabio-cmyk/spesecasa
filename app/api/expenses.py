@@ -1,7 +1,7 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import func, select
 
 from app.deps import DB, AdminUser, CurrentUser
 from app.enums import (
@@ -27,6 +27,7 @@ async def list_expenses(
     user: CurrentUser,
     db: DB,
     fiscal_year: int | None = None,
+    month: int | None = Query(None, ge=1, le=12),
     category: str | None = None,
     scope: ExpenseScope | None = None,
     fiscal_classification: FiscalClassification | None = None,
@@ -39,6 +40,10 @@ async def list_expenses(
     )
     if fiscal_year:
         stmt = stmt.where(Expense.fiscal_year == fiscal_year)
+    # Filtro per mese (1..12, validato da Query) sulla data di acquisto:
+    # alimenta il drill-down dall'andamento mensile della dashboard/analisi.
+    if month:
+        stmt = stmt.where(func.extract("month", Expense.purchase_date) == month)
     if category:
         stmt = stmt.where(Expense.merch_category == category)
     if scope:
