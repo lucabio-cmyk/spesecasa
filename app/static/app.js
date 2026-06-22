@@ -499,7 +499,7 @@ function columnChart(rows) {
   if (!rows.some(r => r.total > 0)) return `<div class="empty"><div class="big">📭</div><p>Nessun movimento per il periodo selezionato.</p></div>`;
   const max = Math.max(...rows.map(r => r.total), 1);
   const cols = rows.map(r => {
-    const eH = (r.expenses / max) * 100, bH = (r.bills / max) * 100;
+    const eH = Math.max(0, (r.expenses / max) * 100), bH = Math.max(0, (r.bills / max) * 100);
     const tip = `${esc(r.full || r.label)}: ${eur(r.total)}` + (r.bills ? ` · spese ${eur(r.expenses)}, bollette ${eur(r.bills)}` : "");
     return `<div class="col-item${r.drill ? " col-clickable" : ""}"${drillAttr(r.drill)} title="${tip}">
         <div class="col-bars">
