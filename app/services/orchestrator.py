@@ -29,6 +29,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.caching import cached_system, mark_messages_cache
 from app.config import settings
 from app.enums import (
     DocumentStatus,
@@ -606,11 +607,13 @@ async def _run_llm(
     client = _llm_client()
     proposals = 0
     try:
+        system = cached_system(_LLM_SYSTEM)
         for _ in range(settings.orchestrator_max_tool_iterations):
+            mark_messages_cache(messages)
             resp = await client.messages.create(
                 model=settings.anthropic_model,
                 max_tokens=settings.agent_max_tokens,
-                system=_LLM_SYSTEM,
+                system=system,
                 tools=_PROPOSAL_TOOLS,
                 messages=messages,
             )

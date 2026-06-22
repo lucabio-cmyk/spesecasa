@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-6"
     # Budget generoso: scontrini multipagina e verifiche fiscali richiedono spazio.
     agent_max_tokens: int = 8192
+    # Prompt caching Anthropic: il prefisso (tools + system prompt + cronologia,
+    # incluso il file base64 dell'upload) viene rispedito a ogni iterazione del
+    # loop tool-use; marcandolo con cache_control viene servito dalla cache
+    # (~10% del costo input) invece di rielaborarlo. Forte risparmio di token.
+    enable_prompt_caching: bool = True
     agent_max_tool_iterations: int = 24
     # Ricerca web dell'agente per affinare/verificare le regole fiscali aggiornate.
     enable_web_search: bool = True
