@@ -12,6 +12,7 @@ from app.enums import (
 )
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
+from app.services import categories as categories_service
 from app.services.resolvers import (
     member_belongs_to_household,
     payment_method_belongs_to_household,
@@ -29,6 +30,7 @@ async def list_expenses(
     fiscal_year: int | None = None,
     month: int | None = Query(None, ge=1, le=12),
     category: str | None = None,
+    group: str | None = None,
     scope: ExpenseScope | None = None,
     fiscal_classification: FiscalClassification | None = None,
     payer_user_id: uuid.UUID | None = None,
@@ -46,6 +48,16 @@ async def list_expenses(
         stmt = stmt.where(func.extract("month", Expense.purchase_date) == month)
     if category:
         stmt = stmt.where(Expense.merch_category == category)
+    # Filtro per macro-categoria (gruppo): include tutte le foglie del gruppo
+    # (es. tutte le voci di reparto sotto «spesa supermercato»). Alimenta il
+    # drill-down dalla vista "Spesa per categoria" della dashboard.
+    if group:
+        leaf_group = await categories_service.leaf_to_group(db, user.household_id)
+        leaves = [leaf for leaf, grp in leaf_group.items() if grp == group]
+        if leaves:
+            stmt = stmt.where(Expense.merch_category.in_(leaves))
+        else:
+            stmt = stmt.where(Expense.merch_category == group)
     if scope:
         stmt = stmt.where(Expense.scope == scope)
     if fiscal_classification:

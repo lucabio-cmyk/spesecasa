@@ -12,6 +12,7 @@ const State = {
   units: [],
   paymentMethods: [],
   paymentMethodsById: {},
+  categories: [],
   view: "dashboard",
   year: localStorage.getItem("year") || "",
   theme: localStorage.getItem("theme") || "light",
@@ -63,11 +64,48 @@ const PAYMENT_TYPE_ICONS = {
   contanti: "💶", bonifico: "🏦", addebito_diretto: "🔁", assegno: "🧾",
   paypal: "🅿️", altro: "💼",
 };
-const CATEGORIES = [
-  "frutta e verdura","carne e pesce","latticini e uova","pane, forno e colazione",
-  "pasta, riso e dispensa","bevande","surgelati","infanzia","igiene personale",
-  "pulizia casa","animali","farmaci","parafarmacia da supermercato","casa e cucina","altre spese supermercato",
+// Categorie di base (foglie), con il gruppo (macro-categoria) di appartenenza:
+// le voci di reparto stanno sotto «spesa supermercato», "farmaci" è di primo
+// livello. Fallback usato finché /household/categories non è caricato in State.
+const SUPERMARKET_GROUP = "spesa supermercato";
+const BUILTIN_CATEGORIES = [
+  { name: "frutta e verdura", parent: SUPERMARKET_GROUP },
+  { name: "carne e pesce", parent: SUPERMARKET_GROUP },
+  { name: "latticini e uova", parent: SUPERMARKET_GROUP },
+  { name: "pane, forno e colazione", parent: SUPERMARKET_GROUP },
+  { name: "pasta, riso e dispensa", parent: SUPERMARKET_GROUP },
+  { name: "bevande", parent: SUPERMARKET_GROUP },
+  { name: "surgelati", parent: SUPERMARKET_GROUP },
+  { name: "infanzia", parent: SUPERMARKET_GROUP },
+  { name: "igiene personale", parent: SUPERMARKET_GROUP },
+  { name: "pulizia casa", parent: SUPERMARKET_GROUP },
+  { name: "animali", parent: SUPERMARKET_GROUP },
+  { name: "farmaci", parent: null },
+  { name: "parafarmacia da supermercato", parent: SUPERMARKET_GROUP },
+  { name: "casa e cucina", parent: SUPERMARKET_GROUP },
+  { name: "altre spese supermercato", parent: SUPERMARKET_GROUP },
 ];
+
+// Opzioni <select> per la categoria merceologica, raggruppate per macro-categoria
+// (le sottocategorie del supermercato in un <optgroup>). Usa le categorie note
+// caricate in State (di base + personalizzate); ricade su BUILTIN_CATEGORIES.
+function categoryOptionsHtml(selected, emptyLabel = "—") {
+  const cats = (State.categories && State.categories.length) ? State.categories : BUILTIN_CATEGORIES;
+  const sel = selected || "";
+  const opt = (v, label) => `<option value="${esc(v)}"${v === sel ? " selected" : ""}>${esc(label)}</option>`;
+  let html = `<option value=""${sel === "" ? " selected" : ""}>${esc(emptyLabel)}</option>`;
+  const tops = cats.filter(c => !c.parent);
+  const groups = {};
+  for (const c of cats) if (c.parent) (groups[c.parent] = groups[c.parent] || []).push(c);
+  for (const c of tops) html += opt(c.name, c.name);
+  for (const g of Object.keys(groups)) {
+    html += `<optgroup label="${esc(g)}">` + groups[g].map(c => opt(c.name, c.name)).join("") + `</optgroup>`;
+  }
+  // Se il valore selezionato non è tra le categorie note (es. storico/eliminata),
+  // mostralo comunque come opzione così non si perde la selezione.
+  if (sel && !cats.some(c => c.name === sel)) html += opt(sel, sel + " (storico)");
+  return html;
+}
 const PALETTE = ["#0d9488","#3b82f6","#f59e0b","#8b5cf6","#ec4899","#22c55e","#ef4444","#06b6d4","#eab308","#6366f1","#14b8a6","#f97316","#a855f7","#64748b"];
 
 /* ---------- Helpers ---------- */
@@ -570,10 +608,15 @@ async function viewDashboard() {
     // Righe dei grafici, ciascuna con la propria drill spec verso la vista filtrata.
     // Le categorie aggregate (bollette/condominio) provengono dal backend e
     // portano alla vista bollette; le altre categorie valide filtrano le spese.
+    // Le righe sono MACRO-categorie: «spesa supermercato» (con sottocategorie),
+    // farmaci, personalizzate, più le bollette. Il drill su una macro-categoria
+    // con sottocategorie filtra le spese per gruppo (tutti i reparti); su una
+    // foglia di primo livello filtra per singola categoria.
     const catRows = byCat.slice(0, 8).map(r => {
       let drill = null;
       if (r.category === "Bollette / utenze") drill = { view: "bills" };
       else if (r.category === "Spese condominiali") drill = { view: "bills", bills: { utility_type: "condominio" } };
+      else if (r.subcategories && r.subcategories.length) drill = { view: "expenses", expenses: { ...yBase, group: r.category } };
       else if (r.category && r.category !== "n/d") drill = { view: "expenses", expenses: { ...yBase, category: r.category } };
       return { label: r.category, total: r.total, drill };
     });
@@ -890,7 +933,7 @@ async function openDocument(id) {
           <div class="card table-wrap" style="margin-bottom:18px"><table class="data"><thead><tr><th>Descrizione</th><th>Categoria</th><th>Pagante</th><th>Beneficiario</th><th class="num">Importo</th></tr></thead>
           <tbody>${lines.map(l => `<tr data-line="${l.id}">
             <td><input class="input" data-exp-field="description_normalized" value="${esc(l.description_normalized || l.description_original || "")}" style="min-width:150px"></td>
-            <td><select class="inline-select" data-exp-field="merch_category">${optList({ "": "—", ...Object.fromEntries(CATEGORIES.map(c => [c, c])) }, l.merch_category || "")}</select></td>
+            <td><select class="inline-select" data-exp-field="merch_category">${categoryOptionsHtml(l.merch_category || "")}</select></td>
             <td><select class="inline-select" data-exp-field="payer_user_id">${optList({ "": "—", ...Object.fromEntries(State.members.map(m => [m.id, m.full_name])) }, l.payer_user_id || "")}</select></td>
             <td><select class="inline-select" data-exp-field="beneficiary_user_id">${optList({ "": "—", ...Object.fromEntries(State.members.map(m => [m.id, m.full_name])) }, l.beneficiary_user_id || "")}</select></td>
             <td class="num"><input class="input" type="number" step="0.01" data-exp-field="line_amount" data-type="number" value="${l.line_amount ?? ""}" style="width:100px;text-align:right"></td>
@@ -1142,7 +1185,7 @@ async function runReview(btn) {
 }
 
 /* ---------- View: Expenses ---------- */
-const defaultExpFilters = () => ({ fiscal_year: "", month: "", category: "", scope: "", fiscal_classification: "", payer_user_id: "", q: "" });
+const defaultExpFilters = () => ({ fiscal_year: "", month: "", category: "", group: "", scope: "", fiscal_classification: "", payer_user_id: "", q: "" });
 const MONTH_OPTS = { "": "Tutti i mesi", ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i + 1), MONTHS_FULL[i + 1]])) };
 let expFilters = defaultExpFilters();
 async function viewExpenses() {
@@ -1151,7 +1194,7 @@ async function viewExpenses() {
   c.innerHTML = `
     <div class="filters">
       <div class="search-box"><span class="s-ico">🔍</span><input class="input" id="exp-q" placeholder="Cerca descrizione, negozio…" value="${esc(expFilters.q)}"></div>
-      <select class="select" id="ef-cat">${optList({ "": "Tutte le categorie", ...Object.fromEntries(CATEGORIES.map(c => [c, c])) }, expFilters.category)}</select>
+      <select class="select" id="ef-cat">${categoryOptionsHtml(expFilters.category, "Tutte le categorie")}</select>
       <select class="select" id="ef-fiscal">${optList({ "": "Tutte le classifiche", ...FISCAL_LABELS }, expFilters.fiscal_classification)}</select>
       <select class="select" id="ef-scope">${optList({ "": "Tutti gli ambiti", ...SCOPE_LABELS }, expFilters.scope)}</select>
       <select class="select" id="ef-payer">${optList({ "": "Tutti i paganti", ...memberOpts }, expFilters.payer_user_id)}</select>
@@ -1162,7 +1205,7 @@ async function viewExpenses() {
     <div id="exp-list">${skeletonRows()}</div>`;
   const reload = debounce(loadExpenses, 250);
   $("#exp-q").addEventListener("input", (e) => { expFilters.q = e.target.value; reload(); });
-  $("#ef-cat").addEventListener("change", (e) => { expFilters.category = e.target.value; loadExpenses(); });
+  $("#ef-cat").addEventListener("change", (e) => { expFilters.category = e.target.value; expFilters.group = ""; loadExpenses(); });
   $("#ef-fiscal").addEventListener("change", (e) => { expFilters.fiscal_classification = e.target.value; loadExpenses(); });
   $("#ef-scope").addEventListener("change", (e) => { expFilters.scope = e.target.value; loadExpenses(); });
   $("#ef-payer").addEventListener("change", (e) => { expFilters.payer_user_id = e.target.value; loadExpenses(); });
@@ -1178,6 +1221,7 @@ async function loadExpenses() {
   if (expFilters.fiscal_year) p.set("fiscal_year", expFilters.fiscal_year);
   if (expFilters.month) p.set("month", expFilters.month);
   if (expFilters.category) p.set("category", expFilters.category);
+  if (expFilters.group) p.set("group", expFilters.group);
   if (expFilters.scope) p.set("scope", expFilters.scope);
   if (expFilters.fiscal_classification) p.set("fiscal_classification", expFilters.fiscal_classification);
   if (expFilters.payer_user_id) p.set("payer_user_id", expFilters.payer_user_id);
@@ -1200,7 +1244,7 @@ async function loadExpenses() {
           <tr data-id="${r.id}">
             <td class="mono">${fmtDate(r.purchase_date)}</td>
             <td><b>${esc(r.description_normalized || r.description_original || "—")}</b>${r.merchant ? `<div class="hint">${esc(r.merchant)}</div>` : ""}</td>
-            <td><select class="inline-select" data-field="merch_category">${optList({ "": "—", ...Object.fromEntries(CATEGORIES.map(c => [c, c])) }, r.merch_category || "")}</select></td>
+            <td><select class="inline-select" data-field="merch_category">${categoryOptionsHtml(r.merch_category || "")}</select></td>
             <td class="num">${eur(r.line_amount)}</td>
             <td><select class="inline-select" data-field="fiscal_classification">${optList(Object.fromEntries(fiscalOpts), r.fiscal_classification)}</select></td>
             <td><select class="inline-select" data-field="scope">${optList(Object.fromEntries(scopeOpts), r.scope)}</select></td>
@@ -1539,8 +1583,10 @@ async function viewSettings() {
     State.members = members; indexMembers();
     State.units = units || [];
     State.paymentMethods = methods || []; indexPaymentMethods();
+    State.categories = categories || [];
     const customCats = (categories || []).filter(c => !c.builtin);
     const builtinCats = (categories || []).filter(c => c.builtin);
+    const builtinGroups = [...new Set(builtinCats.map(c => c.parent).filter(Boolean))];
     const isAdmin = State.user?.role === "admin";
     $("#topbar-actions").innerHTML = "";
     const exportBtn = document.createElement("a");
@@ -1612,18 +1658,22 @@ async function viewSettings() {
           <h3>🏷️ Categorie merceologiche</h3>
           <button class="btn btn-primary btn-sm" id="add-category">+ Aggiungi categoria</button>
         </div>
-        <p class="hint" style="margin-bottom:14px">Le categorie di base coprono la spesa quotidiana. L'assistente può <b>creare nuove categorie</b> quando nessuna è adatta (es. abbigliamento, trasporti, ristorazione); qui le puoi rivedere, modificare o eliminare. Le spese già classificate restano nello storico anche se elimini una categoria.</p>
+        <p class="hint" style="margin-bottom:14px">Le categorie sono organizzate in <b>due livelli</b>: la spesa al supermercato è la macro-categoria «spesa supermercato» suddivisa per reparto, le altre (es. farmaci) sono di primo livello. L'assistente può <b>creare nuove categorie</b> quando nessuna è adatta (es. abbigliamento, trasporti, ristorazione), come macro-categoria o come sottocategoria di un gruppo; qui le puoi rivedere, modificare o eliminare. Le spese già classificate restano nello storico anche se elimini una categoria.</p>
         ${customCats.length ? `<div class="table-wrap"><table class="data">
-          <thead><tr><th>Categoria</th><th>Descrizione</th><th>Esempi</th><th>Origine</th><th></th></tr></thead>
+          <thead><tr><th>Categoria</th><th>Gruppo</th><th>Descrizione</th><th>Esempi</th><th>Origine</th><th></th></tr></thead>
           <tbody>${customCats.map(c => `<tr>
             <td><b>${esc(c.name)}</b></td>
+            <td class="hint">${c.parent ? esc(c.parent) : "<i>primo livello</i>"}</td>
             <td class="hint">${esc(c.description || "—")}</td>
             <td class="hint">${esc((c.examples || []).join(", ") || "—")}</td>
             <td>${c.source === "agent" ? `<span class="badge b-non_rilevante">assistente</span>` : `<span class="badge b-familiare">manuale</span>`}</td>
             <td class="num row" style="gap:4px;justify-content:flex-end"><button class="btn-icon" data-edit-cat="${c.id}" title="Modifica">✏️</button><button class="btn-icon" data-del-cat="${c.id}" title="Elimina">🗑️</button></td>
           </tr>`).join("")}</tbody></table></div>` : `<div class="empty" style="padding:18px"><p class="hint">Nessuna categoria personalizzata: per ora si usano le ${builtinCats.length} categorie di base.</p></div>`}
         <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">Mostra le ${builtinCats.length} categorie di base</summary>
-          <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${builtinCats.map(c => `<span class="badge b-non_rilevante" title="${esc(c.description || "")}">${esc(c.name)}</span>`).join("")}</div>
+          <div style="margin-top:10px">
+            <div class="row" style="flex-wrap:wrap;gap:6px">${builtinCats.filter(c => !c.parent).map(c => `<span class="badge b-non_rilevante" title="${esc(c.description || "")}">${esc(c.name)}</span>`).join("")}</div>
+            ${builtinGroups.map(g => `<div style="margin-top:10px"><div class="hint" style="font-weight:600;margin-bottom:4px">${esc(g)}</div><div class="row" style="flex-wrap:wrap;gap:6px">${builtinCats.filter(c => c.parent === g).map(c => `<span class="badge b-familiare" title="${esc(c.description || "")}">${esc(c.name)}</span>`).join("")}</div></div>`).join("")}
+          </div>
         </details>
       </div>
 
@@ -1715,13 +1765,20 @@ function openUnitForm(unit = null) {
 
 function openCategoryForm(category = null) {
   const cat = category || {};
+  // Gruppi (macro-categorie) disponibili: quelli noti in State + il supermercato.
+  const groupNames = [...new Set([
+    SUPERMARKET_GROUP,
+    ...(State.categories || []).map(c => c.parent).filter(Boolean),
+  ])];
+  const groupOpts = { "": "Nessuno (categoria di primo livello)", ...Object.fromEntries(groupNames.map(g => [g, g])) };
   openModal(`
     <div class="modal-head"><h3>${category ? "Modifica categoria" : "Nuova categoria merceologica"}</h3><button class="btn-icon" data-close>✕</button></div>
     <form id="category-form">
       <div class="field"><label>Nome <span class="hint">(breve, minuscolo)</span></label><input class="input" name="name" placeholder="es. abbigliamento" value="${esc(cat.name || "")}" required></div>
+      <div class="field"><label>Gruppo <span class="hint">(macro-categoria)</span></label><select class="select" name="parent">${optList(groupOpts, cat.parent || "")}</select></div>
       <div class="field"><label>Descrizione <span class="hint">(cosa include)</span></label><input class="input" name="description" placeholder="es. vestiti e calzature" value="${esc(cat.description || "")}"></div>
       <div class="field"><label>Esempi <span class="hint">(separati da virgola)</span></label><input class="input" name="examples" placeholder="es. scarpe, giacca, jeans" value="${esc((cat.examples || []).join(", "))}"></div>
-      <p class="hint" style="margin-bottom:16px">Non creare categorie per i medicinali: usa quella di base “farmaci”.</p>
+      <p class="hint" style="margin-bottom:16px">Lascia il gruppo vuoto per una categoria di primo livello; scegli «spesa supermercato» per un nuovo reparto. Non creare categorie per i medicinali: usa quella di base “farmaci”.</p>
       <button class="btn btn-primary btn-block" type="submit">${category ? "Salva" : "Crea categoria"}</button>
     </form>`);
   $("#modal-root [data-close]").addEventListener("click", closeModal);
@@ -1729,7 +1786,7 @@ function openCategoryForm(category = null) {
     e.preventDefault();
     const fd = Object.fromEntries(new FormData(e.target).entries());
     const examples = (fd.examples || "").split(",").map(s => s.trim()).filter(Boolean);
-    const body = { name: fd.name, description: fd.description || null, examples: examples.length ? examples : null };
+    const body = { name: fd.name, parent: fd.parent || null, description: fd.description || null, examples: examples.length ? examples : null };
     try {
       if (category) await api(`/household/categories/${category.id}`, { method: "PATCH", body });
       else await api("/household/categories", { method: "POST", body });
@@ -1918,15 +1975,17 @@ async function boot() {
   if (!State.token) { renderAuth("login"); return; }
   try {
     State.user = await api("/auth/me");
-    const [members, hh, units, methods] = await Promise.all([
+    const [members, hh, units, methods, categories] = await Promise.all([
       api("/household/members"),
       api("/household").catch(() => null),
       api("/household/units").catch(() => []),
       api("/household/payment-methods").catch(() => []),
+      api("/household/categories").catch(() => []),
     ]);
     State.members = members; indexMembers();
     State.units = units || [];
     State.paymentMethods = methods || []; indexPaymentMethods();
+    State.categories = categories || [];
     if (hh) State.user.household_name = hh.name;
     renderShell();
     refreshReviewBadge();

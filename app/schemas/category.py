@@ -6,12 +6,15 @@ from pydantic import BaseModel
 
 class CategoryCreate(BaseModel):
     name: str
+    # Macro-categoria (gruppo) di appartenenza; None = categoria di primo livello.
+    parent: str | None = None
     description: str | None = None
     examples: list[str] | None = None
 
 
 class CategoryUpdate(BaseModel):
     name: str | None = None
+    parent: str | None = None
     description: str | None = None
     examples: list[str] | None = None
     active: bool | None = None
@@ -21,6 +24,7 @@ class CategoryOut(BaseModel):
     id: uuid.UUID
     household_id: uuid.UUID
     name: str
+    parent: str | None = None
     description: str | None = None
     examples: list[str] | None = None
     source: str
@@ -34,6 +38,8 @@ class KnownCategory(BaseModel):
     """Categoria "nota" al nucleo: una di base (builtin) oppure personalizzata."""
 
     name: str
+    # Macro-categoria (gruppo) di appartenenza; None = categoria di primo livello.
+    parent: str | None = None
     description: str | None = None
     examples: list[str] | None = None
     builtin: bool

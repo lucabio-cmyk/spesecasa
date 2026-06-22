@@ -161,45 +161,79 @@ class DocumentStatus(StrEnum):
     FAILED = "failed"
 
 
-# Categorie merceologiche STABILI per le statistiche domestiche sugli scontrini.
-# Estendibili nel tempo, ma mantenerle stabili per non rompere lo storico.
-MERCHANDISE_CATEGORIES: list[str] = [
-    "frutta e verdura",
-    "carne e pesce",
-    "latticini e uova",
-    "pane, forno e colazione",
-    "pasta, riso e dispensa",
-    "bevande",
-    "surgelati",
-    "infanzia",
-    "igiene personale",
-    "pulizia casa",
-    "animali",
-    "farmaci",
-    "parafarmacia da supermercato",
-    "casa e cucina",
-    "altre spese supermercato",
+# Categorie merceologiche STABILI per le statistiche domestiche, organizzate in
+# DUE LIVELLI (macro-categoria → sottocategoria) per restare coerenti ed evitare
+# doppioni. La spesa del supermercato è per natura suddivisa per reparto: le sue
+# voci sono SOTTOCATEGORIE del gruppo "spesa supermercato". Le altre categorie di
+# base (es. "farmaci") sono macro-categorie a sé (foglie di primo livello, senza
+# padre). Ogni nucleo può aggiungere proprie macro-categorie o sottocategorie
+# personalizzate (tabella `expense_categories`).
+#
+# IMPORTANTE: la spesa resta classificata sulla FOGLIA (sottocategoria o
+# macro-categoria-foglia) in `Expense.merch_category`; il gruppo si deriva dal
+# catalogo (qui sotto / dal `parent` delle categorie personalizzate), senza
+# duplicare l'informazione su ogni riga.
+
+# Macro-categoria del supermercato (parent delle voci di reparto).
+SUPERMARKET_GROUP = "spesa supermercato"
+
+# Descrizione delle macro-categorie (gruppi) di base.
+MERCHANDISE_GROUP_INFO: dict[str, str] = {
+    SUPERMARKET_GROUP: "spesa quotidiana al supermercato/alimentari, suddivisa per reparto",
+}
+
+# Definizione delle categorie merceologiche di base: (nome, descrizione, gruppo).
+# gruppo=None ⇒ macro-categoria di primo livello (foglia senza padre).
+# L'ORDINE è stabile: non cambiarlo per non confondere lo storico e le viste.
+_MERCHANDISE_DEF: list[tuple[str, str, str | None]] = [
+    ("frutta e verdura", "ortofrutta fresca, legumi e frutta secca", SUPERMARKET_GROUP),
+    ("carne e pesce", "carni, salumi, pesce e prodotti ittici", SUPERMARKET_GROUP),
+    ("latticini e uova", "latte, formaggi, yogurt, burro, uova", SUPERMARKET_GROUP),
+    ("pane, forno e colazione", "pane, prodotti da forno, biscotti, cereali, caffè", SUPERMARKET_GROUP),
+    ("pasta, riso e dispensa", "pasta, riso, farine, conserve, condimenti, dispensa secca", SUPERMARKET_GROUP),
+    ("bevande", "acqua, bibite, succhi, vino, birra, alcolici", SUPERMARKET_GROUP),
+    ("surgelati", "prodotti surgelati e gelati", SUPERMARKET_GROUP),
+    ("infanzia", "pannolini, latte e omogeneizzati, prodotti per neonati", SUPERMARKET_GROUP),
+    ("igiene personale", "cura della persona: detergenti, dentifricio, carta igienica", SUPERMARKET_GROUP),
+    ("pulizia casa", "detersivi, prodotti e accessori per la pulizia della casa", SUPERMARKET_GROUP),
+    ("animali", "cibo e accessori per animali domestici", SUPERMARKET_GROUP),
+    ("farmaci", "medicinali con codice del farmaco (AIC/minsan) — dato sanitario", None),
+    ("parafarmacia da supermercato", "integratori generici, cerotti, igiene non medicinale", SUPERMARKET_GROUP),
+    ("casa e cucina", "stoviglie, utensili, piccoli articoli per la casa", SUPERMARKET_GROUP),
+    ("altre spese supermercato", "spesa generica al supermercato non attribuibile a un reparto specifico", SUPERMARKET_GROUP),
 ]
 
-# Descrizione sintetica delle categorie merceologiche stabili: guida l'agente
-# nella classificazione e documenta lo storico (mostrata anche in GUI). Non ha
-# valore fiscale vincolante.
+# Elenco piatto delle categorie di base (foglie), retro-compatibile.
+MERCHANDISE_CATEGORIES: list[str] = [name for name, _d, _g in _MERCHANDISE_DEF]
+
+# Descrizione sintetica delle categorie di base: guida l'agente nella
+# classificazione e documenta lo storico (mostrata anche in GUI). Non ha valore
+# fiscale vincolante.
 MERCHANDISE_CATEGORY_INFO: dict[str, str] = {
-    "frutta e verdura": "ortofrutta fresca, legumi e frutta secca",
-    "carne e pesce": "carni, salumi, pesce e prodotti ittici",
-    "latticini e uova": "latte, formaggi, yogurt, burro, uova",
-    "pane, forno e colazione": "pane, prodotti da forno, biscotti, cereali, caffè",
-    "pasta, riso e dispensa": "pasta, riso, farine, conserve, condimenti, dispensa secca",
-    "bevande": "acqua, bibite, succhi, vino, birra, alcolici",
-    "surgelati": "prodotti surgelati e gelati",
-    "infanzia": "pannolini, latte e omogeneizzati, prodotti per neonati",
-    "igiene personale": "cura della persona: detergenti, dentifricio, carta igienica",
-    "pulizia casa": "detersivi, prodotti e accessori per la pulizia della casa",
-    "animali": "cibo e accessori per animali domestici",
-    "farmaci": "medicinali con codice del farmaco (AIC/minsan) — dato sanitario",
-    "parafarmacia da supermercato": "integratori generici, cerotti, igiene non medicinale",
-    "casa e cucina": "stoviglie, utensili, piccoli articoli per la casa",
-    "altre spese supermercato": "voci non classificabili nelle altre categorie",
+    name: desc for name, desc, _g in _MERCHANDISE_DEF
+}
+
+# Mappa foglia → macro-categoria (gruppo) di base. None ⇒ la foglia è già una
+# macro-categoria di primo livello (es. "farmaci").
+MERCHANDISE_CATEGORY_GROUP: dict[str, str | None] = {
+    name: grp for name, _d, grp in _MERCHANDISE_DEF
+}
+
+# Nomi che indicano GENERICAMENTE "la spesa al supermercato": NON vanno creati
+# come nuove categorie (sarebbero doppioni del gruppo `spesa supermercato`). Una
+# spesa generica del supermercato senza dettaglio di reparto va in "altre spese
+# supermercato"; una voce di reparto va nella sottocategoria adatta. La mappa
+# associa il sinonimo alla sottocategoria di ripiego del gruppo.
+RESERVED_GROUP_SYNONYMS: dict[str, str] = {
+    "spesa supermercato": "altre spese supermercato",
+    "supermercato": "altre spese supermercato",
+    "supermarket": "altre spese supermercato",
+    "spesa": "altre spese supermercato",
+    "spesa alimentare": "altre spese supermercato",
+    "alimentari": "altre spese supermercato",
+    "alimentare": "altre spese supermercato",
+    "generi alimentari": "altre spese supermercato",
+    "drogheria": "altre spese supermercato",
 }
 
 # Categorie merceologiche che contengono dati sanitari sensibili: i FARMACI

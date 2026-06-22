@@ -71,9 +71,13 @@ _BILL_STATUS = [s.value for s in BillStatus]
 # adatta, crearne una nuova con create_expense_category (nome breve, generico,
 # minuscolo) e poi usarla qui. I medicinali vanno SEMPRE in "farmaci".
 _CATEGORY_HINT = (
-    "categoria merceologica: riusa una delle categorie note del nucleo (elencate "
-    "nel contesto); se nessuna è adatta creane una nuova con create_expense_category "
-    "e poi indicala qui. I medicinali vanno sempre in 'farmaci'."
+    "categoria merceologica (sempre la più specifica = la FOGLIA): per la spesa al "
+    "supermercato usa una sottocategoria di reparto del gruppo «spesa supermercato» "
+    "(es. 'frutta e verdura', 'bevande'; usa 'altre spese supermercato' solo se il "
+    "reparto non è distinguibile) — NON usare nomi generici come 'supermercato' o "
+    "'spesa'. Riusa una delle categorie note del nucleo (elencate nel contesto); se "
+    "nessuna è adatta creane una nuova con create_expense_category e poi indicala "
+    "qui. I medicinali vanno sempre in 'farmaci'."
 )
 
 # Guida ai dati strutturati da conservare nella riga: arricchisce l'archivio
@@ -478,18 +482,30 @@ TOOLS = [
             "Crea una NUOVA categoria merceologica per il nucleo, da usare quando NESSUNA "
             "delle categorie note (di base o già personalizzate, elencate nel contesto) "
             "descrive bene la spesa. Usala con parsimonia per non frammentare lo storico: "
-            "prima verifica le categorie esistenti. Scegli un nome breve, generico e "
-            "riutilizzabile (minuscolo, es. 'abbigliamento', 'trasporti', 'ristorazione', "
-            "'cura della casa'); aggiungi una descrizione di cosa includere e qualche "
-            "esempio. È idempotente: se la categoria esiste già (o è di base) viene riusata. "
-            "NON creare categorie per i medicinali o per dati sanitari: i farmaci vanno "
-            "sempre nella categoria di base 'farmaci'. Dopo averla creata, indicala come "
-            "merch_category nelle righe di spesa."
+            "prima verifica le categorie esistenti. Di norma crea una MACRO-categoria di "
+            "primo livello (nome breve, generico, riutilizzabile, minuscolo, es. "
+            "'abbigliamento', 'trasporti', 'ristorazione', 'cura della casa'); usa 'parent' "
+            "solo per aggiungere una SOTTOCATEGORIA a una macro-categoria esistente (es. un "
+            "nuovo reparto sotto «spesa supermercato»). NON creare doppioni o sinonimi: in "
+            "particolare NON creare categorie generiche tipo 'supermercato'/'spesa'/'alimentari' "
+            "(la spesa al supermercato è già il gruppo «spesa supermercato» con le sue "
+            "sottocategorie di reparto). È idempotente: se la categoria esiste già (o è di "
+            "base) viene riusata. NON creare categorie per i medicinali o per dati sanitari: "
+            "i farmaci vanno sempre nella categoria di base 'farmaci'. Dopo averla creata, "
+            "indicala come merch_category nelle righe di spesa."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "nome breve, generico, minuscolo"},
+                "parent": {
+                    "type": "string",
+                    "description": (
+                        "facoltativo: macro-categoria (gruppo) di cui questa è una "
+                        "sottocategoria, es. 'spesa supermercato'. Ometti per una "
+                        "categoria di primo livello."
+                    ),
+                },
                 "description": {"type": "string", "description": "cosa include la categoria"},
                 "examples": {
                     "type": "array",
@@ -843,6 +859,7 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 name=tool_input.get("name", ""),
                 description=tool_input.get("description"),
                 examples=tool_input.get("examples"),
+                parent=tool_input.get("parent"),
                 source="agent",
             )
 

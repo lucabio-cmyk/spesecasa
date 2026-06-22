@@ -10,6 +10,7 @@ from app.models.document import Document
 from app.models.expense import Expense
 from app.models.user import User
 from app.services import bills as bills_service
+from app.services import categories as categories_service
 
 _SENSITIVE = list(SENSITIVE_CATEGORIES)
 
@@ -26,6 +27,12 @@ BILLS_SCOPE = "familiare"
 
 
 async def by_category(db: AsyncSession, household_id: uuid.UUID, year: int | None = None):
+    """Spesa per categoria, organizzata in DUE LIVELLI per coerenza: le voci di
+    reparto del supermercato sono raccolte nella macro-categoria «spesa
+    supermercato» (con il dettaglio in `subcategories`); le altre categorie (es.
+    farmaci, personalizzate) restano di primo livello. Le bollette compaiono come
+    macro-categorie a sé (utenze e spese condominiali). Ogni riga ha sempre il
+    campo `subcategories` (lista, vuota per le foglie)."""
     stmt = (
         select(Expense.merch_category, func.sum(Expense.line_amount), func.count())
         .where(Expense.household_id == household_id)
@@ -34,18 +41,39 @@ async def by_category(db: AsyncSession, household_id: uuid.UUID, year: int | Non
     if year:
         stmt = stmt.where(Expense.fiscal_year == year)
     res = await db.execute(stmt)
-    rows = [
-        {"category": c or "n/d", "total": round(float(t or 0), 2), "count": n}
-        for c, t, n in res.all()
-    ]
+
+    leaf_group = await categories_service.leaf_to_group(db, household_id)
+    # Aggrega le foglie nelle rispettive macro-categorie (gruppi).
+    groups: dict[str, dict] = {}
+    for cat, total, count in res.all():
+        leaf = cat or "n/d"
+        group = leaf_group.get(leaf, leaf)
+        t, n = round(float(total or 0), 2), int(count or 0)
+        g = groups.setdefault(group, {"category": group, "total": 0.0, "count": 0, "subs": {}})
+        g["total"] = round(g["total"] + t, 2)
+        g["count"] += n
+        # Tieni il dettaglio per reparto solo quando la foglia è davvero una
+        # sottocategoria (gruppo diverso dal proprio nome).
+        if group != leaf:
+            sub = g["subs"].setdefault(leaf, {"category": leaf, "total": 0.0, "count": 0})
+            sub["total"] = round(sub["total"] + t, 2)
+            sub["count"] += n
+
+    rows = []
+    for g in groups.values():
+        subs = sorted(g["subs"].values(), key=lambda r: r["total"], reverse=True)
+        rows.append(
+            {"category": g["category"], "total": g["total"], "count": g["count"],
+             "subcategories": subs}
+        )
 
     # Aggiunge le bollette per tenere conto di tutte le spese, distinguendo le
     # utenze (luce, gas, acqua, ...) dalle spese condominiali.
     util_t, util_c, condo_t, condo_c = await _bills_split_total(db, household_id, year)
     if util_c:
-        rows.append({"category": BILLS_CATEGORY_UTILITIES, "total": round(util_t, 2), "count": util_c})
+        rows.append({"category": BILLS_CATEGORY_UTILITIES, "total": round(util_t, 2), "count": util_c, "subcategories": []})
     if condo_c:
-        rows.append({"category": BILLS_CATEGORY_CONDO, "total": round(condo_t, 2), "count": condo_c})
+        rows.append({"category": BILLS_CATEGORY_CONDO, "total": round(condo_t, 2), "count": condo_c, "subcategories": []})
 
     rows.sort(key=lambda r: r["total"], reverse=True)
     return rows

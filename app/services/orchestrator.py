@@ -407,6 +407,14 @@ _PROPOSAL_TOOLS = [
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
+                "parent": {
+                    "type": "string",
+                    "description": (
+                        "facoltativo: macro-categoria (gruppo) di cui questa è una "
+                        "sottocategoria, es. 'spesa supermercato'. Ometti per una "
+                        "categoria di primo livello."
+                    ),
+                },
                 "description": {"type": "string"},
                 "examples": {"type": "array", "items": {"type": "string"}},
                 "reassign_from": {"type": "array", "items": {"type": "string"}},
@@ -513,6 +521,7 @@ async def _llm_dispatch(
             payload={
                 "action": "create_category",
                 "name": cat_name,
+                "parent": inp.get("parent"),
                 "description": inp.get("description"),
                 "examples": inp.get("examples"),
                 "reassign_from": reassign,
@@ -699,6 +708,7 @@ async def apply_review_item(
                 name=name,
                 description=payload.get("description"),
                 examples=payload.get("examples"),
+                parent=payload.get("parent"),
                 source="user",
             )
             if res.get("error"):
