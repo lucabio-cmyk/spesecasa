@@ -352,7 +352,7 @@ const NAV = [
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "revisione", icon: "🔍", label: "Revisione" },
   { id: "expenses", icon: "💶", label: "Spese" },
-  { id: "supermercato", icon: "🔬", label: "Analisi dettaglio" },
+  { id: "supermercato", icon: "🛒", label: "Supermercato" },
   { id: "bills", icon: "🏠", label: "Casa & Bollette" },
   { id: "chat", icon: "💬", label: "Assistente" },
   { id: "settings", icon: "⚙️", label: "Impostazioni" },
@@ -363,7 +363,7 @@ const NAV = [
 function navItems() {
   const items = [...NAV];
   if (State.user?.role === "admin") {
-    const i = items.findIndex(n => n.id === "expenses");
+    const i = items.findIndex(n => n.id === "supermercato");
     items.splice(i + 1, 0, { id: "farmaci", icon: "💊", label: "Farmaci" });
   }
   return items;
@@ -424,7 +424,7 @@ function navigate(view) {
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
-    supermercato: ["Analisi per categoria", "Analisi approfondita per macro-categoria: sottocategorie, esercenti e andamento"],
+    supermercato: ["Supermercato", "Analisi della spesa al supermercato: reparti, esercenti, andamento e confronto con l'anno precedente"],
     farmaci: ["Farmaci", "Catalogo dei medicinali acquistati · riservato all'amministratore"],
     bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
@@ -468,7 +468,6 @@ function applyDrill(spec) {
   if (spec.expenses) { expFilters = { ...defaultExpFilters(), ...spec.expenses }; }
   if (spec.documents) { docFilters = { ...defaultDocFilters(), ...spec.documents }; }
   if (spec.bills) { billFilters = { ...defaultBillFilters(), ...spec.bills }; }
-  if (spec._gaGroup !== undefined) { gaGroup = spec._gaGroup; }
   navigate(spec.view || State.view);
 }
 
@@ -619,7 +618,8 @@ async function viewDashboard() {
       let drill = null;
       if (r.category === "Bollette / utenze") drill = { view: "bills" };
       else if (r.category === "Spese condominiali") drill = { view: "bills", bills: { utility_type: "condominio" } };
-      else if (r.subcategories && r.subcategories.length) drill = { view: "supermercato", _gaGroup: r.category };
+      else if (r.subcategories && r.subcategories.length && r.category === SUPERMARKET_GROUP) drill = { view: "supermercato" };
+      else if (r.subcategories && r.subcategories.length) drill = { view: "expenses", expenses: { ...yBase, group: r.category } };
       else if (r.category && r.category !== "n/d") drill = { view: "expenses", expenses: { ...yBase, category: r.category } };
       return { label: r.category, total: r.total, drill };
     });
@@ -1486,23 +1486,25 @@ async function runReview(btn) {
   }
 }
 
-/* ---------- View: Analisi per categoria (dinamica) ---------- */
-let gaData = null;
-let gaFilters = {};
-let gaExpenses = [];
-let gaYear = null;
-let gaGroup = "";
+/* ---------- View: Supermercato ----------
+   Analisi dedicata alla spesa quotidiana (supermercato, alimentari, casalinghi).
+   Filtra esclusivamente le sottocategorie del gruppo «spesa supermercato».
+   Cross-filtering BI: clicca grafici per filtrare l'intera pagina. */
+let smData = null;
+let smFilters = {};
+let smExpenses = [];
+let smYear = null;
 
-const GA_DIMS = {
+const SM_DIMS = {
   month: {
     label: "Mese",
     key: (r) => r.purchase_date ? parseInt(String(r.purchase_date).split("-")[1], 10) : 0,
     text: (k) => (Number(k) ? MONTHS_FULL[Number(k)] : "Senza data"),
   },
   category: {
-    label: "Categoria",
+    label: "Reparto",
     key: (r) => r.merch_category || "n/d",
-    text: (k) => (k === "n/d" ? "Senza categoria" : k),
+    text: (k) => (k === "n/d" ? "Senza reparto" : k),
   },
   payer: {
     label: "Pagante",
@@ -1510,25 +1512,25 @@ const GA_DIMS = {
     text: (k) => (k ? memberName(k) : "Non attribuito"),
   },
   merchant: {
-    label: "Esercente",
+    label: "Negozio",
     key: (r) => r.merchant || "",
-    text: (k) => (k || "Senza esercente"),
+    text: (k) => (k || "Senza negozio"),
   },
 };
 
-function gaMatches(row, except) {
-  for (const dim of Object.keys(gaFilters)) {
+function smMatches(row, except) {
+  for (const dim of Object.keys(smFilters)) {
     if (dim === except) continue;
-    if (String(GA_DIMS[dim].key(row)) !== String(gaFilters[dim])) return false;
+    if (String(SM_DIMS[dim].key(row)) !== String(smFilters[dim])) return false;
   }
   return true;
 }
 
-function gaAggregate(dim) {
-  const D = GA_DIMS[dim];
+function smAggregate(dim) {
+  const D = SM_DIMS[dim];
   const map = new Map();
-  for (const r of gaExpenses) {
-    if (!gaMatches(r, dim)) continue;
+  for (const r of smExpenses) {
+    if (!smMatches(r, dim)) continue;
     const k = String(D.key(r));
     let e = map.get(k);
     if (!e) { e = { key: k, label: D.text(k), value: 0, count: 0 }; map.set(k, e); }
@@ -1541,22 +1543,22 @@ function gaAggregate(dim) {
   return out;
 }
 
-function gaToggle(dim, val) {
-  if (String(gaFilters[dim]) === String(val)) delete gaFilters[dim];
-  else gaFilters[dim] = String(val);
-  gaRender();
+function smToggle(dim, val) {
+  if (String(smFilters[dim]) === String(val)) delete smFilters[dim];
+  else smFilters[dim] = String(val);
+  smRender();
 }
 
-function gaBars(dim, { limit = 0 } = {}) {
-  let rows = gaAggregate(dim);
+function smBars(dim, { limit = 0 } = {}) {
+  let rows = smAggregate(dim);
   if (limit && rows.length > limit) rows = rows.slice(0, limit);
   if (!rows.length) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
-  const sel = gaFilters[dim];
+  const sel = smFilters[dim];
   const max = Math.max(...rows.map(r => r.value), 1);
   return rows.map((r, i) => {
     const isSel = sel !== undefined && String(sel) === r.key;
     const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
-    return `<div class="bar-row bar-clickable ga-bar${cls}" data-ga-dim="${dim}" data-ga-val="${esc(r.key)}" role="button" tabindex="0" title="${esc(r.label)} · ${eur(r.value)} · ${r.count} voc${r.count === 1 ? "e" : "i"}">
+    return `<div class="bar-row bar-clickable sm-bar${cls}" data-sm-dim="${dim}" data-sm-val="${esc(r.key)}" role="button" tabindex="0" title="${esc(r.label)} · ${eur(r.value)} · ${r.count} voc${r.count === 1 ? "e" : "i"}">
         <span class="lbl">${esc(r.label)}</span>
         <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (r.value / max) * 100)}%;background:${PALETTE[i % PALETTE.length]}"></div></div>
         <span class="amt">${eur(r.value)}</span>
@@ -1564,24 +1566,24 @@ function gaBars(dim, { limit = 0 } = {}) {
   }).join("");
 }
 
-function gaDonut(dim) {
-  const rows = gaAggregate(dim);
+function smDonut(dim) {
+  const rows = smAggregate(dim);
   const total = rows.reduce((s, r) => s + r.value, 0);
   if (!total) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
-  const sel = gaFilters[dim];
+  const sel = smFilters[dim];
   const R = 70, C = 2 * Math.PI * R; let off = 0;
   const segs = rows.map((r, i) => {
     const frac = r.value / total;
     const dash = `${frac * C} ${C - frac * C}`;
     const isSel = sel !== undefined && String(sel) === r.key;
     const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
-    const seg = `<circle class="seg-clickable ga-seg${cls}" data-ga-dim="${dim}" data-ga-val="${esc(r.key)}" r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"></circle>`;
+    const seg = `<circle class="seg-clickable sm-seg${cls}" data-sm-dim="${dim}" data-sm-val="${esc(r.key)}" r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"></circle>`;
     off += frac; return seg;
   }).join("");
   const legend = rows.map((r, i) => {
     const isSel = sel !== undefined && String(sel) === r.key;
     const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
-    return `<span class="leg-clickable ga-leg${cls}" data-ga-dim="${dim}" data-ga-val="${esc(r.key)}" role="button" tabindex="0"><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r.label)} · <b>${eur(r.value)}</b> <small>(${r.count})</small></span>`;
+    return `<span class="leg-clickable sm-leg${cls}" data-sm-dim="${dim}" data-sm-val="${esc(r.key)}" role="button" tabindex="0"><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r.label)} · <b>${eur(r.value)}</b> <small>(${r.count})</small></span>`;
   }).join("");
   return `<div class="donut-wrap">
     <svg viewBox="0 0 180 180" width="180" height="180" style="flex-shrink:0">${segs}
@@ -1591,17 +1593,17 @@ function gaDonut(dim) {
     <div class="legend" style="flex-direction:column;gap:8px">${legend}</div></div>`;
 }
 
-function gaMonthChart() {
-  const agg = gaAggregate("month");
+function smMonthChart() {
+  const agg = smAggregate("month");
   const byKey = Object.fromEntries(agg.map(r => [r.key, r]));
-  const sel = gaFilters.month;
+  const sel = smFilters.month;
   const months = Array.from({ length: 12 }, (_, i) => byKey[String(i + 1)] || { key: String(i + 1), value: 0, count: 0 });
   const max = Math.max(...months.map(m => m.value), 1);
   const cols = months.map((m, i) => {
     const h = Math.max(0, (m.value / max) * 100);
     const isSel = sel !== undefined && String(sel) === m.key;
     const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
-    return `<div class="col-item col-clickable ga-col${cls}" data-ga-dim="month" data-ga-val="${m.key}" role="button" tabindex="0" title="${MONTHS_FULL[i + 1]}: ${eur(m.value)} · ${m.count} voc${m.count === 1 ? "e" : "i"}">
+    return `<div class="col-item col-clickable sm-col${cls}" data-sm-dim="month" data-sm-val="${m.key}" role="button" tabindex="0" title="${MONTHS_FULL[i + 1]}: ${eur(m.value)} · ${m.count} voc${m.count === 1 ? "e" : "i"}">
         <div class="col-bars">
           <div class="col-amt">${eurShort(m.value)}</div>
           <div class="col-stack"><div class="col-seg" style="height:${h}%;background:${COL_EXP_COLOR}"></div></div>
@@ -1612,8 +1614,8 @@ function gaMonthChart() {
   return `<div class="col-chart">${cols}</div>`;
 }
 
-function gaMonthStats() {
-  const agg = gaAggregate("month");
+function smMonthStats() {
+  const agg = smAggregate("month");
   const active = agg.filter(m => Number(m.key) && m.value > 0);
   const total = active.reduce((s, m) => s + m.value, 0);
   const avg = active.length ? total / active.length : 0;
@@ -1625,56 +1627,56 @@ function gaMonthStats() {
     </div>`;
 }
 
-function gaSlicers() {
-  const keys = Object.keys(gaFilters);
+function smSlicers() {
+  const keys = Object.keys(smFilters);
   if (!keys.length) {
     return `<div class="slicers"><span class="hint">💡 Clicca su una barra, una colonna o uno spicchio per filtrare tutta la pagina.</span></div>`;
   }
   const chips = keys.map(dim => {
-    const D = GA_DIMS[dim];
-    return `<span class="slicer-chip"><span class="dim-lbl">${esc(D.label)}</span>${esc(D.text(gaFilters[dim]))}<span class="x" data-ga-remove="${dim}" role="button" tabindex="0" title="Rimuovi filtro">✕</span></span>`;
+    const D = SM_DIMS[dim];
+    return `<span class="slicer-chip"><span class="dim-lbl">${esc(D.label)}</span>${esc(D.text(smFilters[dim]))}<span class="x" data-sm-remove="${dim}" role="button" tabindex="0" title="Rimuovi filtro">✕</span></span>`;
   }).join("");
   return `<div class="slicers">${chips}
-      <button class="btn btn-ghost btn-sm" data-ga-clear>Azzera filtri</button>
-      <button class="btn btn-ghost btn-sm" data-ga-open>Apri nelle Spese ↗</button>
+      <button class="btn btn-ghost btn-sm" data-sm-clear>Azzera filtri</button>
+      <button class="btn btn-ghost btn-sm" data-sm-open>Apri nelle Spese ↗</button>
     </div>`;
 }
 
-function gaOpenInExpenses() {
+function smOpenInExpenses() {
   const f = defaultExpFilters();
-  f.fiscal_year = gaYear ? String(gaYear) : "";
-  if (gaGroup) f.group = gaGroup;
-  if (gaFilters.month) f.month = String(gaFilters.month);
-  if (gaFilters.category) f.category = gaFilters.category;
-  if (gaFilters.payer) f.payer_user_id = gaFilters.payer;
-  if (gaFilters.merchant) f.q = gaFilters.merchant;
+  f.fiscal_year = smYear ? String(smYear) : "";
+  f.group = SUPERMARKET_GROUP;
+  if (smFilters.month) f.month = String(smFilters.month);
+  if (smFilters.category) f.category = smFilters.category;
+  if (smFilters.payer) f.payer_user_id = smFilters.payer;
+  if (smFilters.merchant) f.q = smFilters.merchant;
   expFilters = f;
   navigate("expenses");
 }
 
-function gaBindClicks(root) {
-  root.querySelectorAll("[data-ga-dim][data-ga-val]").forEach(el => {
-    const fire = () => gaToggle(el.dataset.gaDim, el.dataset.gaVal);
+function smBindClicks(root) {
+  root.querySelectorAll("[data-sm-dim][data-sm-val]").forEach(el => {
+    const fire = () => smToggle(el.dataset.smDim, el.dataset.smVal);
     el.addEventListener("click", fire);
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
   });
-  root.querySelectorAll("[data-ga-remove]").forEach(el => {
-    const fire = () => { delete gaFilters[el.dataset.gaRemove]; gaRender(); };
+  root.querySelectorAll("[data-sm-remove]").forEach(el => {
+    const fire = () => { delete smFilters[el.dataset.smRemove]; smRender(); };
     el.addEventListener("click", fire);
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
   });
-  root.querySelector("[data-ga-clear]")?.addEventListener("click", () => { gaFilters = {}; gaRender(); });
-  root.querySelector("[data-ga-open]")?.addEventListener("click", gaOpenInExpenses);
+  root.querySelector("[data-sm-clear]")?.addEventListener("click", () => { smFilters = {}; smRender(); });
+  root.querySelector("[data-sm-open]")?.addEventListener("click", smOpenInExpenses);
 }
 
-function gaCompareCard() {
-  if (!gaData?.compare) return "";
-  const cmp = gaData.compare;
+function smCompareCard() {
+  if (!smData?.compare) return "";
+  const cmp = smData.compare;
   const rows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0);
   if (!rows.length && !cmp.previous_total) return "";
   const head = `<span class="hint">${eur(cmp.current_total)} vs ${eur(cmp.previous_total)} · ${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)}</span> ${pctBadge(cmp.delta_pct)}`;
   const body = rows.length ? `<div class="table-wrap"><table class="data">
-      <thead><tr><th>Categoria</th><th class="num">${cmp.year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
+      <thead><tr><th>Reparto</th><th class="num">${cmp.year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
       <tbody>${rows.map(r => `<tr>
           <td>${esc(r.category)}</td>
           <td class="num">${eur(r.current)}</td>
@@ -1685,30 +1687,24 @@ function gaCompareCard() {
   return chartCard(`Confronto ${cmp.previous_year} → ${cmp.year}`, body, { action: head, style: "margin-top:16px" });
 }
 
-function gaGroupLabel() {
-  return gaGroup || "Tutte le categorie";
-}
-
-function gaRender() {
+function smRender() {
   const c = $("#content");
   if (!c) return;
-  const filtered = gaExpenses.filter(r => gaMatches(r, null));
+  const filtered = smExpenses.filter(r => smMatches(r, null));
   const total = filtered.reduce((s, r) => s + Number(r.line_amount || 0), 0);
-  const nFilters = Object.keys(gaFilters).length;
-  const cats = new Set(filtered.map(r => r.merch_category || "n/d")).size;
-  const avg = filtered.length ? total / filtered.length : 0;
-  const label = gaGroupLabel();
+  const nFilters = Object.keys(smFilters).length;
+  const reparti = new Set(filtered.map(r => r.merch_category || "n/d")).size;
 
   const kpis = [
-    { label: nFilters ? "Spesa filtrata" : `${label} ${gaYear}`, value: eur(total), icon: "🛒", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"}` : `spesa totale dell'anno` },
-    { label: "Articoli", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `su ${gaExpenses.length} totali` },
-    { label: "Categorie", value: cats, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "categorie distinte" },
-    { label: "Scontrino medio", value: gaData?.avg_basket ? eur(gaData.avg_basket) : eur(avg), icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: gaData?.n_receipts ? `su ${gaData.n_receipts} documenti` : "importo medio per voce" },
+    { label: nFilters ? "Spesa filtrata" : `Supermercato ${smYear}`, value: eur(total), icon: "🛒", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"}` : `spesa alimentari e casalinghi` },
+    { label: "Articoli", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `su ${smExpenses.length} totali` },
+    { label: "Reparti", value: reparti, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "reparti distinti" },
+    { label: "Scontrino medio", value: smData?.avg_basket ? eur(smData.avg_basket) : "—", icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: smData?.n_receipts ? `su ${smData.n_receipts} scontrini` : "nessuno scontrino" },
   ];
 
   const tableRows = filtered.slice().sort((a, b) => (b.purchase_date || "").localeCompare(a.purchase_date || "")).slice(0, 200);
   const table = filtered.length ? `<div class="table-wrap"><table class="data">
-      <thead><tr><th>Data</th><th>Descrizione</th><th>Categoria</th><th>Esercente</th><th>Pagante</th><th class="num">Importo</th></tr></thead>
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Reparto</th><th>Negozio</th><th>Pagante</th><th class="num">Importo</th></tr></thead>
       <tbody>${tableRows.map(r => `<tr>
           <td class="mono">${fmtDate(r.purchase_date)}</td>
           <td>${esc(r.description_normalized || r.description_original || "—")}</td>
@@ -1721,73 +1717,18 @@ function gaRender() {
     : `<div class="empty"><div class="big">📭</div><p>Nessun articolo per i filtri selezionati.</p></div>`;
 
   c.innerHTML = `
-    ${gaSlicers()}
+    ${smSlicers()}
     ${kpiGrid(kpis)}
-    ${chartCard(`Andamento mensile ${gaYear}`, gaMonthStats() + gaMonthChart(), { sub: `${label} per mese · clicca per filtrare`, style: "margin-top:16px" })}
+    ${chartCard(`Andamento mensile ${smYear}`, smMonthStats() + smMonthChart(), { sub: "Spesa al supermercato mese per mese · clicca per filtrare", style: "margin-top:16px" })}
     <div class="grid cols-2" style="margin-top:16px">
-      ${chartCard("Spesa per categoria", gaDonut("category"), { sub: "Clicca uno spicchio per filtrare" })}
-      ${chartCard("Spesa per pagante", gaBars("payer"), { sub: "Chi spende di più" })}
+      ${chartCard("Spesa per reparto", smDonut("category"), { sub: "Frutta, carne, bevande, casalinghi... · clicca per filtrare" })}
+      ${chartCard("Chi fa la spesa", smBars("payer"), { sub: "Spesa per pagante" })}
     </div>
-    ${chartCard("Dove spendi di più", gaBars("merchant", { limit: 10 }), { sub: "Esercenti per importo · clicca per filtrare", style: "margin-top:16px" })}
-    ${gaCompareCard()}
-    ${chartCard(`Dettaglio articoli ${nFilters ? "filtrati" : gaYear}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
+    ${chartCard("Dove fai la spesa", smBars("merchant", { limit: 10 }), { sub: "Supermercati e negozi alimentari per importo", style: "margin-top:16px" })}
+    ${smCompareCard()}
+    ${chartCard(`Dettaglio articoli ${nFilters ? "filtrati" : smYear}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
 
-  gaBindClicks(c);
-}
-
-function gaAvailableGroups() {
-  const cats = (State.categories && State.categories.length) ? State.categories : BUILTIN_CATEGORIES;
-  const groups = new Set();
-  for (const c of cats) {
-    if (c.parent) groups.add(c.parent);
-  }
-  const tops = cats.filter(c => !c.parent).map(c => c.name);
-  return { groups: [...groups].sort(), tops };
-}
-
-function gaGroupSelector(onChange) {
-  const { groups, tops } = gaAvailableGroups();
-  const sel = document.createElement("select");
-  sel.className = "select";
-  sel.style.width = "auto";
-  const cur = gaGroup || "";
-  let html = `<option value=""${cur === "" ? " selected" : ""}>Tutte le categorie</option>`;
-  for (const g of groups) html += `<option value="${esc(g)}"${g === cur ? " selected" : ""}>${esc(g)}</option>`;
-  if (tops.length) {
-    html += `<optgroup label="Categorie singole">`;
-    for (const t of tops) html += `<option value="${esc(t)}"${t === cur ? " selected" : ""}>${esc(t)}</option>`;
-    html += `</optgroup>`;
-  }
-  sel.innerHTML = html;
-  sel.addEventListener("change", () => { gaGroup = sel.value; onChange(); });
-  return sel;
-}
-
-async function gaLoadData() {
-  const c = $("#content");
-  c.innerHTML = skeletonGrid();
-  gaFilters = {};
-  const groupParam = gaGroup ? `&group=${encodeURIComponent(gaGroup)}` : "";
-  const expUrl = gaGroup
-    ? `/expenses?group=${encodeURIComponent(gaGroup)}&fiscal_year=${gaYear}`
-    : `/expenses?fiscal_year=${gaYear}`;
-  try {
-    const [stats, expenses] = await Promise.all([
-      api(`/stats/group-analysis?year=${gaYear}${groupParam}`),
-      api(expUrl),
-    ]);
-    gaData = stats;
-    gaExpenses = expenses;
-    if (!gaExpenses.length) {
-      const label = gaGroupLabel();
-      c.innerHTML = emptyBox("📭", `Nessuna spesa in «${label}»`, `Non ci sono voci di spesa per «${label}» nel ${gaYear}. Carica documenti o registra spese con l'assistente.`, "Carica documento", "upload");
-      bindEmpty(c);
-      return;
-    }
-    gaRender();
-  } catch (err) {
-    c.innerHTML = errorBox(err.message);
-  }
+  smBindClicks(c);
 }
 
 async function viewSupermercato() {
@@ -1798,12 +1739,32 @@ async function viewSupermercato() {
     State.year = String(new Date().getFullYear());
     localStorage.setItem("year", State.year);
   }
-  gaYear = State.year;
-  if (!gaGroup) gaGroup = SUPERMARKET_GROUP;
-  const actions = $("#topbar-actions");
-  actions.appendChild(gaGroupSelector(() => gaLoadData()));
-  actions.appendChild(await yearSelector(() => { gaYear = State.year || String(new Date().getFullYear()); gaLoadData(); }));
-  await gaLoadData();
+  smYear = State.year;
+  smFilters = {};
+  $("#topbar-actions").appendChild(await yearSelector(() => { smYear = State.year || String(new Date().getFullYear()); smLoadData(); }));
+  await smLoadData();
+}
+
+async function smLoadData() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  smFilters = {};
+  try {
+    const [stats, expenses] = await Promise.all([
+      api(`/stats/group-analysis?year=${smYear}&group=${encodeURIComponent(SUPERMARKET_GROUP)}`),
+      api(`/expenses?group=${encodeURIComponent(SUPERMARKET_GROUP)}&fiscal_year=${smYear}`),
+    ]);
+    smData = stats;
+    smExpenses = expenses;
+    if (!smExpenses.length) {
+      c.innerHTML = emptyBox("🛒", "Nessuna spesa al supermercato", `Non ci sono spese per alimentari e casalinghi nel ${smYear}. Carica gli scontrini della spesa o registrali con l'assistente.`, "Carica documento", "upload");
+      bindEmpty(c);
+      return;
+    }
+    smRender();
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
 }
 
 /* ---------- View: Expenses ---------- */
