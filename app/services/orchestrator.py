@@ -44,6 +44,7 @@ from app.models.expense import Expense
 from app.models.review import ReviewItem
 from app.models.user import User
 from app.services import categories as categories_service
+from app.services.llm import create_message
 
 # Documenti che dovrebbero avere righe di spesa (gli altri — bollette, contratti,
 # verbali, F24, bonifici — sono gestiti diversamente).
@@ -390,7 +391,9 @@ async def _check_duplicates(
 def _llm_client():
     from anthropic import AsyncAnthropic
 
-    return AsyncAnthropic(api_key=settings.anthropic_api_key)
+    return AsyncAnthropic(
+        api_key=settings.anthropic_api_key, max_retries=settings.anthropic_max_retries
+    )
 
 
 _PROPOSAL_TOOLS = [
@@ -607,7 +610,8 @@ async def _run_llm(
     proposals = 0
     try:
         for _ in range(settings.orchestrator_max_tool_iterations):
-            resp = await client.messages.create(
+            resp = await create_message(
+                client,
                 model=settings.anthropic_model,
                 max_tokens=settings.agent_max_tokens,
                 system=_LLM_SYSTEM,

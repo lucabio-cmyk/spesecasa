@@ -14,9 +14,12 @@ from app.models.household import Household
 from app.models.property_unit import PropertyUnit
 from app.services import categories as categories_service
 from app.services.embeddings import index_document
+from app.services.llm import create_message, is_overloaded
 from app.services.storage import get_storage
 
-client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+client = AsyncAnthropic(
+    api_key=settings.anthropic_api_key, max_retries=settings.anthropic_max_retries
+)
 
 
 def _build_tools() -> list[dict]:
@@ -156,7 +159,8 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
         )
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
-        resp = await client.messages.create(
+        resp = await create_message(
+            client,
             model=settings.anthropic_model,
             max_tokens=settings.agent_max_tokens,
             system=system_text,
@@ -277,7 +281,16 @@ async def process_document(
         await db.rollback()
         await db.refresh(document)
         document.status = DocumentStatus.FAILED
-        document.reliability_note = f"Errore elaborazione: {exc}"
+        if is_overloaded(exc):
+            # Sovraccarico temporaneo del servizio AI (529): non è un problema del
+            # documento, basta riprovare più tardi con «Rielabora».
+            document.reliability_note = (
+                "Servizio AI temporaneamente sovraccarico (529 Overloaded): il "
+                "documento non è stato elaborato. Riprova tra qualche minuto con "
+                "«Rielabora»."
+            )
+        else:
+            document.reliability_note = f"Errore elaborazione: {exc}"
         await db.commit()
 
 

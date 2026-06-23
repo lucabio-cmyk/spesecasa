@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     enable_web_search: bool = True
     web_search_max_uses: int = 6
     web_search_country: str = "IT"
+    # Resilienza alle chiamate Anthropic. L'SDK ritenta già gli errori
+    # transitori (429/5xx/529 overloaded), ma in caso di sovraccarico prolungato
+    # i pochi tentativi di default non bastano: `anthropic_max_retries` è passato
+    # al client SDK, mentre `anthropic_retry_*` governa il nostro retry esterno
+    # con backoff esponenziale (vedi app/services/llm.py).
+    anthropic_max_retries: int = 4
+    anthropic_retry_attempts: int = 5
+    anthropic_retry_base_delay: float = 2.0
+    anthropic_retry_max_delay: float = 30.0
 
     # Auth
     jwt_secret: str = "cambia-questa-stringa"
