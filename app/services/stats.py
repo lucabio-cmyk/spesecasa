@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.enums import SENSITIVE_CATEGORIES, UtilityType
+from app.enums import SENSITIVE_CATEGORIES, SUPERMARKET_GROUP, UtilityType
 from app.models.bill import Bill
 from app.models.document import Document
 from app.models.expense import Expense
@@ -612,3 +612,171 @@ async def insights(
     return _compute_insights(
         year, overview_data, comparison, categories, fiscal, upcoming_bills
     )
+
+
+async def _group_leaves(
+    db: AsyncSession, household_id: uuid.UUID, group: str | None,
+) -> tuple[list[str], str]:
+    """Restituisce (foglie, nome_gruppo). Se group è None restituisce tutte le
+    categorie note (analisi globale)."""
+    leaf_group = await categories_service.leaf_to_group(db, household_id)
+    if group:
+        norm = categories_service.normalize_name(group)
+        leaves = [leaf for leaf, grp in leaf_group.items() if grp == norm]
+        if not leaves:
+            leaves = [norm]
+        return leaves, group
+    return list(leaf_group.keys()), "tutte le categorie"
+
+
+async def group_analysis(
+    db: AsyncSession, household_id: uuid.UUID, year: int,
+    group: str | None = None, is_admin: bool = True,
+):
+    leaves, group_label = await _group_leaves(db, household_id, group)
+    if not leaves:
+        return {"year": year, "group": group_label, "total": 0, "count": 0,
+                "by_subcategory": [], "monthly": [], "top_merchants": [],
+                "by_payer": [], "compare": None, "avg_basket": 0,
+                "n_receipts": 0}
+
+    cat_filter = Expense.merch_category.in_(leaves)
+    if not is_admin:
+        safe_leaves = [l for l in leaves if l not in SENSITIVE_CATEGORIES]
+        if not safe_leaves:
+            return {"year": year, "group": group_label, "total": 0, "count": 0,
+                    "by_subcategory": [], "monthly": [], "top_merchants": [],
+                    "by_payer": [], "compare": None, "avg_basket": 0,
+                    "n_receipts": 0}
+        cat_filter = Expense.merch_category.in_(safe_leaves)
+
+    base = (
+        Expense.household_id == household_id,
+        Expense.fiscal_year == year,
+        cat_filter,
+    )
+
+    # Totali
+    totals = await db.execute(
+        select(func.coalesce(func.sum(Expense.line_amount), 0), func.count())
+        .where(*base)
+    )
+    total, count = totals.one()
+    total, count = float(total or 0), int(count or 0)
+
+    # Per sottocategoria
+    cat_stmt = (
+        select(Expense.merch_category, func.sum(Expense.line_amount), func.count())
+        .where(*base)
+        .group_by(Expense.merch_category)
+        .order_by(func.sum(Expense.line_amount).desc())
+    )
+    by_sub = [
+        {"category": cat or "n/d", "total": round(float(t or 0), 2), "count": int(n)}
+        for cat, t, n in (await db.execute(cat_stmt)).all()
+    ]
+
+    # Mensile
+    emonth = func.extract("month", Expense.purchase_date)
+    month_stmt = (
+        select(emonth, func.coalesce(func.sum(Expense.line_amount), 0), func.count())
+        .where(*base, Expense.purchase_date.is_not(None))
+        .group_by(emonth)
+    )
+    month_map = {int(m): (float(t or 0), int(n)) for m, t, n in (await db.execute(month_stmt)).all() if m is not None}
+    monthly_rows = [
+        {"month": m, "label": MONTH_LABELS[m],
+         "total": round(month_map.get(m, (0, 0))[0], 2),
+         "count": month_map.get(m, (0, 0))[1]}
+        for m in range(1, 13)
+    ]
+
+    # Top esercenti
+    merch_stmt = (
+        select(Expense.merchant, func.sum(Expense.line_amount), func.count())
+        .where(*base, Expense.merchant.is_not(None), Expense.merchant != "")
+        .group_by(Expense.merchant)
+        .order_by(func.sum(Expense.line_amount).desc())
+        .limit(10)
+    )
+    top_merchants = [
+        {"merchant": m, "total": round(float(t or 0), 2), "count": int(n)}
+        for m, t, n in (await db.execute(merch_stmt)).all()
+    ]
+
+    # Per pagante
+    PayerUser = aliased(User)
+    payer_stmt = (
+        select(PayerUser.id, PayerUser.full_name, func.sum(Expense.line_amount), func.count())
+        .join(PayerUser, Expense.payer_user_id == PayerUser.id, isouter=True)
+        .where(*base)
+        .group_by(PayerUser.id, PayerUser.full_name)
+        .order_by(func.sum(Expense.line_amount).desc())
+    )
+    by_payer = [
+        {"user_id": str(uid) if uid else None, "name": name or "Non attribuito",
+         "total": round(float(t or 0), 2), "count": int(n)}
+        for uid, name, t, n in (await db.execute(payer_stmt)).all()
+    ]
+
+    # Confronto anno precedente (per sottocategoria)
+    prev = year - 1
+    prev_base = (
+        Expense.household_id == household_id,
+        Expense.fiscal_year == prev,
+        cat_filter,
+    )
+    prev_totals = await db.execute(
+        select(func.coalesce(func.sum(Expense.line_amount), 0), func.count())
+        .where(*prev_base)
+    )
+    prev_total, prev_count = prev_totals.one()
+    prev_total = float(prev_total or 0)
+
+    prev_cat = (
+        select(Expense.merch_category, func.sum(Expense.line_amount))
+        .where(*prev_base)
+        .group_by(Expense.merch_category)
+    )
+    prev_map = {cat or "n/d": float(t or 0) for cat, t in (await db.execute(prev_cat)).all()}
+
+    compare_cats = []
+    all_cats = set(r["category"] for r in by_sub) | set(prev_map.keys())
+    for cat in all_cats:
+        ct = next((r["total"] for r in by_sub if r["category"] == cat), 0)
+        pt = prev_map.get(cat, 0)
+        compare_cats.append({
+            "category": cat, "current": round(ct, 2), "previous": round(pt, 2),
+            "delta": round(ct - pt, 2), "delta_pct": _pct_change(ct, pt),
+        })
+    compare_cats.sort(key=lambda r: r["current"], reverse=True)
+
+    compare = {
+        "year": year, "previous_year": prev,
+        "current_total": round(total, 2), "previous_total": round(prev_total, 2),
+        "delta": round(total - prev_total, 2),
+        "delta_pct": _pct_change(total, prev_total),
+        "by_category": compare_cats,
+    }
+
+    # Scontrino medio (approssimato per documento: raggruppa per document_id)
+    basket_stmt = (
+        select(func.coalesce(func.sum(Expense.line_amount), 0), func.count(func.distinct(Expense.document_id)))
+        .where(*base, Expense.document_id.is_not(None))
+    )
+    basket_total, n_docs = (await db.execute(basket_stmt)).one()
+    avg_basket = round(float(basket_total or 0) / n_docs, 2) if n_docs else 0
+
+    return {
+        "year": year,
+        "group": group_label,
+        "total": round(total, 2),
+        "count": count,
+        "avg_basket": avg_basket,
+        "n_receipts": n_docs,
+        "by_subcategory": by_sub,
+        "monthly": monthly_rows,
+        "top_merchants": top_merchants,
+        "by_payer": by_payer,
+        "compare": compare,
+    }

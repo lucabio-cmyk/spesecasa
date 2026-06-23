@@ -352,6 +352,7 @@ const NAV = [
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "revisione", icon: "🔍", label: "Revisione" },
   { id: "expenses", icon: "💶", label: "Spese" },
+  { id: "supermercato", icon: "🔬", label: "Analisi dettaglio" },
   { id: "bills", icon: "🏠", label: "Casa & Bollette" },
   { id: "chat", icon: "💬", label: "Assistente" },
   { id: "settings", icon: "⚙️", label: "Impostazioni" },
@@ -423,6 +424,7 @@ function navigate(view) {
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
+    supermercato: ["Analisi per categoria", "Analisi approfondita per macro-categoria: sottocategorie, esercenti e andamento"],
     farmaci: ["Farmaci", "Catalogo dei medicinali acquistati · riservato all'amministratore"],
     bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
@@ -433,7 +435,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, supermercato: viewSupermercato, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -466,6 +468,7 @@ function applyDrill(spec) {
   if (spec.expenses) { expFilters = { ...defaultExpFilters(), ...spec.expenses }; }
   if (spec.documents) { docFilters = { ...defaultDocFilters(), ...spec.documents }; }
   if (spec.bills) { billFilters = { ...defaultBillFilters(), ...spec.bills }; }
+  if (spec._gaGroup !== undefined) { gaGroup = spec._gaGroup; }
   navigate(spec.view || State.view);
 }
 
@@ -616,7 +619,7 @@ async function viewDashboard() {
       let drill = null;
       if (r.category === "Bollette / utenze") drill = { view: "bills" };
       else if (r.category === "Spese condominiali") drill = { view: "bills", bills: { utility_type: "condominio" } };
-      else if (r.subcategories && r.subcategories.length) drill = { view: "expenses", expenses: { ...yBase, group: r.category } };
+      else if (r.subcategories && r.subcategories.length) drill = { view: "supermercato", _gaGroup: r.category };
       else if (r.category && r.category !== "n/d") drill = { view: "expenses", expenses: { ...yBase, category: r.category } };
       return { label: r.category, total: r.total, drill };
     });
@@ -1481,6 +1484,326 @@ async function runReview(btn) {
     toast("Errore", { desc: err.message, type: "err" });
     if (btn) { btn.disabled = false; btn.innerHTML = "🔍 Verifica ora"; }
   }
+}
+
+/* ---------- View: Analisi per categoria (dinamica) ---------- */
+let gaData = null;
+let gaFilters = {};
+let gaExpenses = [];
+let gaYear = null;
+let gaGroup = "";
+
+const GA_DIMS = {
+  month: {
+    label: "Mese",
+    key: (r) => r.purchase_date ? parseInt(String(r.purchase_date).split("-")[1], 10) : 0,
+    text: (k) => (Number(k) ? MONTHS_FULL[Number(k)] : "Senza data"),
+  },
+  category: {
+    label: "Categoria",
+    key: (r) => r.merch_category || "n/d",
+    text: (k) => (k === "n/d" ? "Senza categoria" : k),
+  },
+  payer: {
+    label: "Pagante",
+    key: (r) => r.payer_user_id || "",
+    text: (k) => (k ? memberName(k) : "Non attribuito"),
+  },
+  merchant: {
+    label: "Esercente",
+    key: (r) => r.merchant || "",
+    text: (k) => (k || "Senza esercente"),
+  },
+};
+
+function gaMatches(row, except) {
+  for (const dim of Object.keys(gaFilters)) {
+    if (dim === except) continue;
+    if (String(GA_DIMS[dim].key(row)) !== String(gaFilters[dim])) return false;
+  }
+  return true;
+}
+
+function gaAggregate(dim) {
+  const D = GA_DIMS[dim];
+  const map = new Map();
+  for (const r of gaExpenses) {
+    if (!gaMatches(r, dim)) continue;
+    const k = String(D.key(r));
+    let e = map.get(k);
+    if (!e) { e = { key: k, label: D.text(k), value: 0, count: 0 }; map.set(k, e); }
+    e.value += Number(r.line_amount || 0);
+    e.count++;
+  }
+  const out = [...map.values()];
+  if (dim === "month") out.sort((a, b) => Number(a.key) - Number(b.key));
+  else out.sort((a, b) => b.value - a.value);
+  return out;
+}
+
+function gaToggle(dim, val) {
+  if (String(gaFilters[dim]) === String(val)) delete gaFilters[dim];
+  else gaFilters[dim] = String(val);
+  gaRender();
+}
+
+function gaBars(dim, { limit = 0 } = {}) {
+  let rows = gaAggregate(dim);
+  if (limit && rows.length > limit) rows = rows.slice(0, limit);
+  if (!rows.length) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
+  const sel = gaFilters[dim];
+  const max = Math.max(...rows.map(r => r.value), 1);
+  return rows.map((r, i) => {
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<div class="bar-row bar-clickable ga-bar${cls}" data-ga-dim="${dim}" data-ga-val="${esc(r.key)}" role="button" tabindex="0" title="${esc(r.label)} · ${eur(r.value)} · ${r.count} voc${r.count === 1 ? "e" : "i"}">
+        <span class="lbl">${esc(r.label)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (r.value / max) * 100)}%;background:${PALETTE[i % PALETTE.length]}"></div></div>
+        <span class="amt">${eur(r.value)}</span>
+      </div>`;
+  }).join("");
+}
+
+function gaDonut(dim) {
+  const rows = gaAggregate(dim);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  if (!total) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
+  const sel = gaFilters[dim];
+  const R = 70, C = 2 * Math.PI * R; let off = 0;
+  const segs = rows.map((r, i) => {
+    const frac = r.value / total;
+    const dash = `${frac * C} ${C - frac * C}`;
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    const seg = `<circle class="seg-clickable ga-seg${cls}" data-ga-dim="${dim}" data-ga-val="${esc(r.key)}" r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"></circle>`;
+    off += frac; return seg;
+  }).join("");
+  const legend = rows.map((r, i) => {
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<span class="leg-clickable ga-leg${cls}" data-ga-dim="${dim}" data-ga-val="${esc(r.key)}" role="button" tabindex="0"><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r.label)} · <b>${eur(r.value)}</b> <small>(${r.count})</small></span>`;
+  }).join("");
+  return `<div class="donut-wrap">
+    <svg viewBox="0 0 180 180" width="180" height="180" style="flex-shrink:0">${segs}
+      <text x="90" y="84" text-anchor="middle" font-size="13" fill="var(--text-faint)">Totale</text>
+      <text x="90" y="104" text-anchor="middle" font-size="17" font-weight="800" fill="var(--text)">${eur(total)}</text>
+    </svg>
+    <div class="legend" style="flex-direction:column;gap:8px">${legend}</div></div>`;
+}
+
+function gaMonthChart() {
+  const agg = gaAggregate("month");
+  const byKey = Object.fromEntries(agg.map(r => [r.key, r]));
+  const sel = gaFilters.month;
+  const months = Array.from({ length: 12 }, (_, i) => byKey[String(i + 1)] || { key: String(i + 1), value: 0, count: 0 });
+  const max = Math.max(...months.map(m => m.value), 1);
+  const cols = months.map((m, i) => {
+    const h = Math.max(0, (m.value / max) * 100);
+    const isSel = sel !== undefined && String(sel) === m.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<div class="col-item col-clickable ga-col${cls}" data-ga-dim="month" data-ga-val="${m.key}" role="button" tabindex="0" title="${MONTHS_FULL[i + 1]}: ${eur(m.value)} · ${m.count} voc${m.count === 1 ? "e" : "i"}">
+        <div class="col-bars">
+          <div class="col-amt">${eurShort(m.value)}</div>
+          <div class="col-stack"><div class="col-seg" style="height:${h}%;background:${COL_EXP_COLOR}"></div></div>
+        </div>
+        <div class="col-lbl">${MONTHS_FULL[i + 1].slice(0, 3)}</div>
+      </div>`;
+  }).join("");
+  return `<div class="col-chart">${cols}</div>`;
+}
+
+function gaMonthStats() {
+  const agg = gaAggregate("month");
+  const active = agg.filter(m => Number(m.key) && m.value > 0);
+  const total = active.reduce((s, m) => s + m.value, 0);
+  const avg = active.length ? total / active.length : 0;
+  const peak = active.reduce((a, m) => (m.value > (a?.value || 0) ? m : a), null);
+  return `<div class="mini-stats">
+      <div><span class="hint">Totale</span><b>${eur(total)}</b></div>
+      <div><span class="hint">Media mensile</span><b>${eur(avg)}</b><span class="hint">${active.length} mes${active.length === 1 ? "e" : "i"} con spesa</span></div>
+      <div><span class="hint">Mese di picco</span><b>${peak ? MONTHS_FULL[Number(peak.key)] : "—"}</b>${peak ? `<span class="hint">${eur(peak.value)}</span>` : ""}</div>
+    </div>`;
+}
+
+function gaSlicers() {
+  const keys = Object.keys(gaFilters);
+  if (!keys.length) {
+    return `<div class="slicers"><span class="hint">💡 Clicca su una barra, una colonna o uno spicchio per filtrare tutta la pagina.</span></div>`;
+  }
+  const chips = keys.map(dim => {
+    const D = GA_DIMS[dim];
+    return `<span class="slicer-chip"><span class="dim-lbl">${esc(D.label)}</span>${esc(D.text(gaFilters[dim]))}<span class="x" data-ga-remove="${dim}" role="button" tabindex="0" title="Rimuovi filtro">✕</span></span>`;
+  }).join("");
+  return `<div class="slicers">${chips}
+      <button class="btn btn-ghost btn-sm" data-ga-clear>Azzera filtri</button>
+      <button class="btn btn-ghost btn-sm" data-ga-open>Apri nelle Spese ↗</button>
+    </div>`;
+}
+
+function gaOpenInExpenses() {
+  const f = defaultExpFilters();
+  f.fiscal_year = gaYear ? String(gaYear) : "";
+  if (gaGroup) f.group = gaGroup;
+  if (gaFilters.month) f.month = String(gaFilters.month);
+  if (gaFilters.category) f.category = gaFilters.category;
+  if (gaFilters.payer) f.payer_user_id = gaFilters.payer;
+  if (gaFilters.merchant) f.q = gaFilters.merchant;
+  expFilters = f;
+  navigate("expenses");
+}
+
+function gaBindClicks(root) {
+  root.querySelectorAll("[data-ga-dim][data-ga-val]").forEach(el => {
+    const fire = () => gaToggle(el.dataset.gaDim, el.dataset.gaVal);
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+  root.querySelectorAll("[data-ga-remove]").forEach(el => {
+    const fire = () => { delete gaFilters[el.dataset.gaRemove]; gaRender(); };
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+  root.querySelector("[data-ga-clear]")?.addEventListener("click", () => { gaFilters = {}; gaRender(); });
+  root.querySelector("[data-ga-open]")?.addEventListener("click", gaOpenInExpenses);
+}
+
+function gaCompareCard() {
+  if (!gaData?.compare) return "";
+  const cmp = gaData.compare;
+  const rows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0);
+  if (!rows.length && !cmp.previous_total) return "";
+  const head = `<span class="hint">${eur(cmp.current_total)} vs ${eur(cmp.previous_total)} · ${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)}</span> ${pctBadge(cmp.delta_pct)}`;
+  const body = rows.length ? `<div class="table-wrap"><table class="data">
+      <thead><tr><th>Categoria</th><th class="num">${cmp.year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+          <td>${esc(r.category)}</td>
+          <td class="num">${eur(r.current)}</td>
+          <td class="num" style="color:var(--text-soft)">${eur(r.previous)}</td>
+          <td class="num">${pctBadge(r.delta_pct)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>` : `<div class="empty"><div class="big">📭</div><p>Nessun dato per l'anno precedente.</p></div>`;
+  return chartCard(`Confronto ${cmp.previous_year} → ${cmp.year}`, body, { action: head, style: "margin-top:16px" });
+}
+
+function gaGroupLabel() {
+  return gaGroup || "Tutte le categorie";
+}
+
+function gaRender() {
+  const c = $("#content");
+  if (!c) return;
+  const filtered = gaExpenses.filter(r => gaMatches(r, null));
+  const total = filtered.reduce((s, r) => s + Number(r.line_amount || 0), 0);
+  const nFilters = Object.keys(gaFilters).length;
+  const cats = new Set(filtered.map(r => r.merch_category || "n/d")).size;
+  const avg = filtered.length ? total / filtered.length : 0;
+  const label = gaGroupLabel();
+
+  const kpis = [
+    { label: nFilters ? "Spesa filtrata" : `${label} ${gaYear}`, value: eur(total), icon: "🛒", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"}` : `spesa totale dell'anno` },
+    { label: "Articoli", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `su ${gaExpenses.length} totali` },
+    { label: "Categorie", value: cats, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "categorie distinte" },
+    { label: "Scontrino medio", value: gaData?.avg_basket ? eur(gaData.avg_basket) : eur(avg), icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: gaData?.n_receipts ? `su ${gaData.n_receipts} documenti` : "importo medio per voce" },
+  ];
+
+  const tableRows = filtered.slice().sort((a, b) => (b.purchase_date || "").localeCompare(a.purchase_date || "")).slice(0, 200);
+  const table = filtered.length ? `<div class="table-wrap"><table class="data">
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Categoria</th><th>Esercente</th><th>Pagante</th><th class="num">Importo</th></tr></thead>
+      <tbody>${tableRows.map(r => `<tr>
+          <td class="mono">${fmtDate(r.purchase_date)}</td>
+          <td>${esc(r.description_normalized || r.description_original || "—")}</td>
+          <td>${esc(r.merch_category || "—")}</td>
+          <td>${esc(r.merchant || "—")}</td>
+          <td>${esc(r.payer_user_id ? memberName(r.payer_user_id) : "—")}</td>
+          <td class="num">${eur(r.line_amount)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>${filtered.length > 200 ? `<p class="hint" style="margin-top:10px">Primi 200 di ${filtered.length} articoli.</p>` : ""}`
+    : `<div class="empty"><div class="big">📭</div><p>Nessun articolo per i filtri selezionati.</p></div>`;
+
+  c.innerHTML = `
+    ${gaSlicers()}
+    ${kpiGrid(kpis)}
+    ${chartCard(`Andamento mensile ${gaYear}`, gaMonthStats() + gaMonthChart(), { sub: `${label} per mese · clicca per filtrare`, style: "margin-top:16px" })}
+    <div class="grid cols-2" style="margin-top:16px">
+      ${chartCard("Spesa per categoria", gaDonut("category"), { sub: "Clicca uno spicchio per filtrare" })}
+      ${chartCard("Spesa per pagante", gaBars("payer"), { sub: "Chi spende di più" })}
+    </div>
+    ${chartCard("Dove spendi di più", gaBars("merchant", { limit: 10 }), { sub: "Esercenti per importo · clicca per filtrare", style: "margin-top:16px" })}
+    ${gaCompareCard()}
+    ${chartCard(`Dettaglio articoli ${nFilters ? "filtrati" : gaYear}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
+
+  gaBindClicks(c);
+}
+
+function gaAvailableGroups() {
+  const cats = (State.categories && State.categories.length) ? State.categories : BUILTIN_CATEGORIES;
+  const groups = new Set();
+  for (const c of cats) {
+    if (c.parent) groups.add(c.parent);
+  }
+  const tops = cats.filter(c => !c.parent).map(c => c.name);
+  return { groups: [...groups].sort(), tops };
+}
+
+function gaGroupSelector(onChange) {
+  const { groups, tops } = gaAvailableGroups();
+  const sel = document.createElement("select");
+  sel.className = "select";
+  sel.style.width = "auto";
+  const cur = gaGroup || "";
+  let html = `<option value=""${cur === "" ? " selected" : ""}>Tutte le categorie</option>`;
+  for (const g of groups) html += `<option value="${esc(g)}"${g === cur ? " selected" : ""}>${esc(g)}</option>`;
+  if (tops.length) {
+    html += `<optgroup label="Categorie singole">`;
+    for (const t of tops) html += `<option value="${esc(t)}"${t === cur ? " selected" : ""}>${esc(t)}</option>`;
+    html += `</optgroup>`;
+  }
+  sel.innerHTML = html;
+  sel.addEventListener("change", () => { gaGroup = sel.value; onChange(); });
+  return sel;
+}
+
+async function gaLoadData() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  gaFilters = {};
+  const groupParam = gaGroup ? `&group=${encodeURIComponent(gaGroup)}` : "";
+  const expUrl = gaGroup
+    ? `/expenses?group=${encodeURIComponent(gaGroup)}&fiscal_year=${gaYear}`
+    : `/expenses?fiscal_year=${gaYear}`;
+  try {
+    const [stats, expenses] = await Promise.all([
+      api(`/stats/group-analysis?year=${gaYear}${groupParam}`),
+      api(expUrl),
+    ]);
+    gaData = stats;
+    gaExpenses = expenses;
+    if (!gaExpenses.length) {
+      const label = gaGroupLabel();
+      c.innerHTML = emptyBox("📭", `Nessuna spesa in «${label}»`, `Non ci sono voci di spesa per «${label}» nel ${gaYear}. Carica documenti o registra spese con l'assistente.`, "Carica documento", "upload");
+      bindEmpty(c);
+      return;
+    }
+    gaRender();
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
+  }
+}
+
+async function viewSupermercato() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  $("#topbar-actions").innerHTML = "";
+  if (!State.year) {
+    State.year = String(new Date().getFullYear());
+    localStorage.setItem("year", State.year);
+  }
+  gaYear = State.year;
+  if (!gaGroup) gaGroup = SUPERMARKET_GROUP;
+  const actions = $("#topbar-actions");
+  actions.appendChild(gaGroupSelector(() => gaLoadData()));
+  actions.appendChild(await yearSelector(() => { gaYear = State.year || String(new Date().getFullYear()); gaLoadData(); }));
+  await gaLoadData();
 }
 
 /* ---------- View: Expenses ---------- */
