@@ -1794,11 +1794,15 @@ async function viewSupermercato() {
   const c = $("#content");
   c.innerHTML = skeletonGrid();
   $("#topbar-actions").innerHTML = "";
-  gaYear = State.year || new Date().getFullYear();
+  if (!State.year) {
+    State.year = String(new Date().getFullYear());
+    localStorage.setItem("year", State.year);
+  }
+  gaYear = State.year;
   if (!gaGroup) gaGroup = SUPERMARKET_GROUP;
   const actions = $("#topbar-actions");
   actions.appendChild(gaGroupSelector(() => gaLoadData()));
-  actions.appendChild(await yearSelector(() => { gaYear = State.year || new Date().getFullYear(); gaLoadData(); }));
+  actions.appendChild(await yearSelector(() => { gaYear = State.year || String(new Date().getFullYear()); gaLoadData(); }));
   await gaLoadData();
 }
 

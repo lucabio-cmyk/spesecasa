@@ -738,7 +738,7 @@ async def group_analysis(
         .where(*prev_base)
         .group_by(Expense.merch_category)
     )
-    prev_map = {cat: float(t or 0) for cat, t in (await db.execute(prev_cat)).all()}
+    prev_map = {cat or "n/d": float(t or 0) for cat, t in (await db.execute(prev_cat)).all()}
 
     compare_cats = []
     all_cats = set(r["category"] for r in by_sub) | set(prev_map.keys())
@@ -761,11 +761,11 @@ async def group_analysis(
 
     # Scontrino medio (approssimato per documento: raggruppa per document_id)
     basket_stmt = (
-        select(func.count(func.distinct(Expense.document_id)))
+        select(func.coalesce(func.sum(Expense.line_amount), 0), func.count(func.distinct(Expense.document_id)))
         .where(*base, Expense.document_id.is_not(None))
     )
-    n_docs = (await db.execute(basket_stmt)).scalar_one() or 0
-    avg_basket = round(total / n_docs, 2) if n_docs else 0
+    basket_total, n_docs = (await db.execute(basket_stmt)).one()
+    avg_basket = round(float(basket_total or 0) / n_docs, 2) if n_docs else 0
 
     return {
         "year": year,
