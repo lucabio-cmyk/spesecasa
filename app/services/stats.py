@@ -614,27 +614,46 @@ async def insights(
     )
 
 
-async def _supermarket_leaves(
-    db: AsyncSession, household_id: uuid.UUID
-) -> list[str]:
+async def _group_leaves(
+    db: AsyncSession, household_id: uuid.UUID, group: str | None,
+) -> tuple[list[str], str]:
+    """Restituisce (foglie, nome_gruppo). Se group è None restituisce tutte le
+    categorie note (analisi globale)."""
     leaf_group = await categories_service.leaf_to_group(db, household_id)
-    norm = categories_service.normalize_name(SUPERMARKET_GROUP)
-    return [leaf for leaf, grp in leaf_group.items() if grp == norm]
+    if group:
+        norm = categories_service.normalize_name(group)
+        leaves = [leaf for leaf, grp in leaf_group.items() if grp == norm]
+        if not leaves:
+            leaves = [norm]
+        return leaves, group
+    return list(leaf_group.keys()), "tutte le categorie"
 
 
-async def supermarket_analysis(
-    db: AsyncSession, household_id: uuid.UUID, year: int
+async def group_analysis(
+    db: AsyncSession, household_id: uuid.UUID, year: int,
+    group: str | None = None, is_admin: bool = True,
 ):
-    leaves = await _supermarket_leaves(db, household_id)
+    leaves, group_label = await _group_leaves(db, household_id, group)
     if not leaves:
-        return {"year": year, "total": 0, "count": 0, "by_subcategory": [],
-                "monthly": [], "top_merchants": [], "by_payer": [],
-                "compare": None, "avg_basket": 0}
+        return {"year": year, "group": group_label, "total": 0, "count": 0,
+                "by_subcategory": [], "monthly": [], "top_merchants": [],
+                "by_payer": [], "compare": None, "avg_basket": 0,
+                "n_receipts": 0}
+
+    cat_filter = Expense.merch_category.in_(leaves)
+    if not is_admin:
+        safe_leaves = [l for l in leaves if l not in SENSITIVE_CATEGORIES]
+        if not safe_leaves:
+            return {"year": year, "group": group_label, "total": 0, "count": 0,
+                    "by_subcategory": [], "monthly": [], "top_merchants": [],
+                    "by_payer": [], "compare": None, "avg_basket": 0,
+                    "n_receipts": 0}
+        cat_filter = Expense.merch_category.in_(safe_leaves)
 
     base = (
         Expense.household_id == household_id,
         Expense.fiscal_year == year,
-        Expense.merch_category.in_(leaves),
+        cat_filter,
     )
 
     # Totali
@@ -705,7 +724,7 @@ async def supermarket_analysis(
     prev_base = (
         Expense.household_id == household_id,
         Expense.fiscal_year == prev,
-        Expense.merch_category.in_(leaves),
+        cat_filter,
     )
     prev_totals = await db.execute(
         select(func.coalesce(func.sum(Expense.line_amount), 0), func.count())
@@ -750,6 +769,7 @@ async def supermarket_analysis(
 
     return {
         "year": year,
+        "group": group_label,
         "total": round(total, 2),
         "count": count,
         "avg_basket": avg_basket,

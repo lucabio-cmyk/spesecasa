@@ -83,12 +83,16 @@ async def compare(user: CurrentUser, db: DB, year: int | None = None):
     )
 
 
-@router.get("/supermarket")
-async def supermarket(user: CurrentUser, db: DB, year: int | None = None):
-    """Analisi approfondita della spesa al supermercato: suddivisione per
-    reparto, andamento mensile, esercenti, confronto anno-su-anno."""
-    return await stats_service.supermarket_analysis(
-        db, user.household_id, year or date.today().year
+@router.get("/group-analysis")
+async def group_analysis(
+    user: CurrentUser, db: DB, group: str = "", year: int | None = None,
+):
+    """Analisi approfondita di una macro-categoria: suddivisione per
+    sottocategoria, andamento mensile, esercenti, confronto anno-su-anno.
+    Senza `group` analizza tutte le categorie di primo livello (con sotto)."""
+    return await stats_service.group_analysis(
+        db, user.household_id, year or date.today().year,
+        group=group or None, is_admin=_is_admin(user),
     )
 
 
