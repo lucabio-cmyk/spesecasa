@@ -108,7 +108,8 @@ soggetto e archivia.
   medicinali hanno una categoria merceologica dedicata `farmaci` (distinta da
   `parafarmacia da supermercato`). Dallo "scontrino parlante"/ricevuta sanitaria
   l'agente estrae il codice del farmaco (AIC/minsan) e lo cerca online con
-  `web_search` su fonti autorevoli (banca dati AIFA) per identificare nome
+  `web_search` tramite una ricerca internet generica (es. Google), non solo
+  sulle banche dati specifiche (AIFA/Ministero), per identificare nome
   commerciale, principio attivo e ATC, salvandoli in `Expense.details`
   (`codice_aic`, `minsan`, `farmaco`, `principio_attivo`, `atc`). Essendo dati
   sanitari sensibili, la **visualizzazione di dettaglio dei farmaci è riservata
