@@ -36,14 +36,15 @@ def is_overloaded(exc: Exception) -> bool:
     """True se l'errore è un sovraccarico dell'API (529 / overloaded_error)."""
     if getattr(exc, "status_code", None) == 529:
         return True
-    return type(exc).__name__ == "OverloadedError"
+    # Si scorre l'MRO così il controllo regge anche con sottoclassi/wrapper.
+    return any(cls.__name__ == "OverloadedError" for cls in type(exc).__mro__)
 
 
 def is_retryable(exc: Exception) -> bool:
     """True per gli errori transitori dell'API che conviene ritentare."""
     if getattr(exc, "status_code", None) in _RETRY_STATUS_CODES:
         return True
-    return type(exc).__name__ in _RETRY_EXC_NAMES
+    return any(cls.__name__ in _RETRY_EXC_NAMES for cls in type(exc).__mro__)
 
 
 async def create_message(client, **kwargs):

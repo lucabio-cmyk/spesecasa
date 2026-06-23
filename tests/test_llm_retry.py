@@ -47,8 +47,13 @@ def test_is_overloaded_detects_529():
 
 
 def test_is_retryable_classification():
+    class SubclassedConnectionError(APIConnectionError):
+        pass
+
     assert llm.is_retryable(_FakeOverloaded()) is True
     assert llm.is_retryable(APIConnectionError()) is True
+    # Una sottoclasse di un errore transitorio resta ritentabile (via __mro__).
+    assert llm.is_retryable(SubclassedConnectionError()) is True
     assert llm.is_retryable(_FakeBadRequest()) is False
 
 
