@@ -30,7 +30,9 @@ soggetto e archivia.
   originale archiviato — PDF/immagine — per analizzarlo di nuovo su richiesta),
   `save_document` (header), `add_expenses` (righe/movimenti), `record_expense`
   (spesa da chat), `find_expenses`/`delete_expense` (ricerca e cancellazione
-  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`
+  spesa da chat), `save_bill`/`record_bill` (bollette di casa),
+  `find_bills`/`update_bill` (ricerca di una bolletta/rata esistente — anche se
+  già pagata — e aggiornamento per stato/pagamento senza duplicare), `query_expenses`
   (aggregati + opzioni `include_monthly`/`include_top_merchants`/`include_comparison`),
   `query_bills` (costi/andamento/scadenzario + `include_monthly`),
   `get_yearly_summary`, `get_insights` (osservazioni automatiche sull'anno),
@@ -59,8 +61,10 @@ soggetto e archivia.
   propria `due_date` e `status` (`da_pagare`/`pagata`/`scaduta`/`rateizzata`),
   senza accorparle né duplicare scadenze già presenti, così da alimentare lo
   scadenzario (`query_bills`/`bills_service` con `include_upcoming`). Una rata
-  prima programmata e poi pagata è la stessa voce (si aggiorna lo stato), non
-  una seconda registrazione.
+  prima programmata e poi pagata è la stessa voce: l'agente la ritrova con
+  `find_bills` (che restituisce anche le voci già pagate, a differenza di
+  `query_bills include_upcoming` limitato agli stati aperti) e ne aggiorna stato
+  e `paid_date` con `update_bill`, senza creare una seconda registrazione.
 - **Condominio, verbali di assemblea e unità immobiliari**
   (`app/models/property_unit.py`, sezione CONDOMINIO del system prompt, tool
   `list_property_units`): il nucleo configura le proprie unità immobiliari
