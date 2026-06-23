@@ -1,6 +1,7 @@
 import base64
 import uuid
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -296,13 +297,17 @@ TOOLS = [
     {
         "name": "save_bill",
         "description": (
-            "Registra una BOLLETTA / spesa di casa ricorrente (luce, gas, acqua, "
-            "rifiuti/TARI, internet/telefono, riscaldamento, condominio, ...) estratta "
-            "dal documento in elaborazione. Usalo per le bollette al posto di add_expenses, "
-            "per abilitare valutazione dei costi (consumi, costo unitario, andamento) e "
-            "amministrazione (scadenze, stato pagamento). Estrai periodo di competenza, "
-            "scadenza, importo totale e, se presenti, consumo con unità (kWh/Smc/m³) e "
-            "scomposizione del costo. Non inventare i valori mancanti."
+            "Registra una BOLLETTA dell'utenza (luce, gas, acqua, rifiuti/TARI, "
+            "internet/telefono, riscaldamento) o un'altra SPESA DI CASA ricorrente "
+            "estratta dal documento in elaborazione. Gestisce anche le SPESE "
+            "CONDOMINIALI (utility_type=condominio), che NON sono bollette di un'utenza "
+            "ma vengono registrate qui per condividere la gestione di costi e scadenze e "
+            "restano una categoria distinta. Usalo al posto di add_expenses per abilitare "
+            "valutazione dei costi (consumi, costo unitario, andamento) e amministrazione "
+            "(scadenze, stato pagamento). Estrai periodo di competenza, scadenza, importo "
+            "totale e, se presenti, consumo con unità (kWh/Smc/m³) e scomposizione del "
+            "costo. Per i pagamenti futuri/rateali registra ogni rata come voce separata "
+            "con la sua due_date e il suo stato. Non inventare i valori mancanti."
         ),
         "input_schema": {
             "type": "object",
@@ -322,6 +327,7 @@ TOOLS = [
                 "consumption_quantity": {"type": "number"},
                 "consumption_unit": {"type": "string", "description": "kWh, Smc, m³, ..."},
                 "status": {"type": "string", "enum": _BILL_STATUS},
+                "paid_date": {"type": "string", "description": "data dell'effettivo pagamento AAAA-MM-GG (impostala quando status=pagata)"},
                 "payment_method": {"type": "string", "description": "domiciliazione/RID, bonifico, ..."},
                 "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento del nucleo usato, da list_payment_methods"},
                 "payer": {"type": "string", "description": "intestatario/soggetto che paga"},
@@ -359,6 +365,7 @@ TOOLS = [
                 "consumption_quantity": {"type": "number"},
                 "consumption_unit": {"type": "string"},
                 "status": {"type": "string", "enum": _BILL_STATUS},
+                "paid_date": {"type": "string", "description": "data dell'effettivo pagamento AAAA-MM-GG (impostala quando status=pagata)"},
                 "payment_method": {"type": "string"},
                 "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento usato, da list_payment_methods"},
                 "payer": {"type": "string"},
@@ -387,6 +394,54 @@ TOOLS = [
                 "include_upcoming": {"type": "boolean", "description": "includi lo scadenzario"},
                 "include_monthly": {"type": "boolean", "description": "includi l'andamento mensile (richiede fiscal_year)"},
             },
+        },
+    },
+    {
+        "name": "find_bills",
+        "description": (
+            "Cerca SINGOLE bollette/spese di casa (non aggregati) e le restituisce con il "
+            "loro id, indipendentemente dallo stato (incluse quelle già pagate). Usalo per "
+            "individuare una voce da aggiornare con update_bill e, soprattutto, PRIMA di "
+            "registrare una nuova rata/bolletta per verificare se è già presente ed evitare "
+            "doppioni nello scadenzario. Restituisce id, tipo, fornitore, periodo, scadenza, "
+            "importo e stato. Filtri opzionali: testo (fornitore/numero/note), anno, tipo "
+            "utenza, unità immobiliare, scadenza, stato."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "testo cercato in fornitore/numero bolletta/note"},
+                "fiscal_year": {"type": "integer"},
+                "utility_type": {"type": "string", "enum": _UTILITY},
+                "property_unit": {"type": "string", "description": "unità immobiliare (nome, alias o id)"},
+                "due_date": {"type": "string", "description": "scadenza esatta AAAA-MM-GG"},
+                "status": {"type": "string", "enum": _BILL_STATUS},
+                "limit": {"type": "integer", "description": "max risultati (default 20)"},
+            },
+        },
+    },
+    {
+        "name": "update_bill",
+        "description": (
+            "Aggiorna una bolletta/spesa di casa ESISTENTE dato il suo id (ottenuto da "
+            "find_bills). Usalo per registrare un pagamento avvenuto (status=pagata + "
+            "paid_date) o per correggere scadenza, importo, stato, metodo di pagamento o "
+            "note SENZA creare un secondo record: una rata prima programmata e poi pagata è "
+            "la STESSA voce. Passa solo i campi da modificare; gli altri restano invariati."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "bill_id": {"type": "string", "description": "id della bolletta da aggiornare"},
+                "status": {"type": "string", "enum": _BILL_STATUS},
+                "paid_date": {"type": "string", "description": "data dell'effettivo pagamento AAAA-MM-GG"},
+                "due_date": {"type": "string", "description": "nuova scadenza AAAA-MM-GG"},
+                "total_amount": {"type": "number"},
+                "payment_method": {"type": "string"},
+                "payment_method_id": {"type": "string", "description": "id (o etichetta/ultime 4 cifre) del metodo di pagamento usato, da list_payment_methods"},
+                "notes": {"type": "string"},
+            },
+            "required": ["bill_id"],
         },
     },
     {
@@ -1005,6 +1060,8 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 consumption_quantity=to_decimal(tool_input.get("consumption_quantity")),
                 consumption_unit=unit,
                 status=status,
+                paid_date=to_date(tool_input.get("paid_date"))
+                or (date.today() if status is BillStatus.PAGATA else None),
                 payment_method=tool_input.get("payment_method"),
                 fiscal_year=fyear,
                 reliability_note=tool_input.get("reliability_note"),
@@ -1055,6 +1112,102 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
                 )
             return result
 
+        if name == "find_bills":
+            stmt = (
+                select(Bill)
+                .where(Bill.household_id == ctx.household_id)
+                .order_by(Bill.due_date.desc().nullslast(), Bill.created_at.desc())
+            )
+            if tool_input.get("fiscal_year"):
+                stmt = stmt.where(Bill.fiscal_year == int(tool_input["fiscal_year"]))
+            utype_raw = tool_input.get("utility_type")
+            if utype_raw in _UTILITY:
+                stmt = stmt.where(Bill.utility_type == UtilityType(utype_raw))
+            unit_id = await resolve_unit_id(db, ctx.household_id, tool_input.get("property_unit"))
+            if unit_id:
+                stmt = stmt.where(Bill.property_unit_id == unit_id)
+            ddate = to_date(tool_input.get("due_date"))
+            if ddate:
+                stmt = stmt.where(Bill.due_date == ddate)
+            status_raw = tool_input.get("status")
+            if status_raw in _BILL_STATUS:
+                stmt = stmt.where(Bill.status == BillStatus(status_raw))
+            needle = (tool_input.get("query") or "").strip().lower()
+            if needle:
+                like = f"%{needle}%"
+                stmt = stmt.where(
+                    func.lower(func.coalesce(Bill.supplier, ""))
+                    .concat(" ")
+                    .concat(func.lower(func.coalesce(Bill.bill_number, "")))
+                    .concat(" ")
+                    .concat(func.lower(func.coalesce(Bill.notes, "")))
+                    .like(like)
+                )
+            limit = int(tool_input.get("limit") or 20)
+            stmt = stmt.limit(max(1, min(limit, 50)))
+            rows = list((await db.execute(stmt)).scalars())
+            return {
+                "count": len(rows),
+                "bills": [
+                    {
+                        "id": str(b.id),
+                        "utility_type": str(b.utility_type),
+                        "supplier": b.supplier,
+                        "bill_number": b.bill_number,
+                        "period_start": b.period_start.isoformat() if b.period_start else None,
+                        "period_end": b.period_end.isoformat() if b.period_end else None,
+                        "due_date": b.due_date.isoformat() if b.due_date else None,
+                        "total_amount": str(b.total_amount) if b.total_amount is not None else None,
+                        "status": str(b.status),
+                        "paid_date": b.paid_date.isoformat() if b.paid_date else None,
+                        "fiscal_year": b.fiscal_year,
+                        "property_unit_id": str(b.property_unit_id) if b.property_unit_id else None,
+                        "from_document": b.document_id is not None,
+                    }
+                    for b in rows
+                ],
+            }
+
+        if name == "update_bill":
+            try:
+                bill_id = uuid.UUID(str(tool_input.get("bill_id")))
+            except (ValueError, TypeError):
+                return {"ok": False, "error": "bill_id non valido"}
+            bill = await db.get(Bill, bill_id)
+            if not bill or bill.household_id != ctx.household_id:
+                return {"ok": False, "error": "bolletta non trovata"}
+            status_raw = tool_input.get("status")
+            if status_raw in _BILL_STATUS:
+                bill.status = BillStatus(status_raw)
+            if "paid_date" in tool_input:
+                bill.paid_date = to_date(tool_input.get("paid_date"))
+            # Saldata senza data esplicita: usa oggi come data di pagamento.
+            if bill.status is BillStatus.PAGATA and bill.paid_date is None:
+                bill.paid_date = date.today()
+            if "due_date" in tool_input:
+                bill.due_date = to_date(tool_input.get("due_date"))
+            if "total_amount" in tool_input:
+                bill.total_amount = to_decimal(tool_input.get("total_amount"))
+            if "notes" in tool_input:
+                bill.notes = tool_input.get("notes")
+            pm_ref = tool_input.get("payment_method_id") or tool_input.get("payment_method")
+            if pm_ref:
+                bill.payment_method_id = await resolve_payment_method_id(
+                    db, ctx.household_id, pm_ref, bill.payer_user_id
+                )
+            if tool_input.get("payment_method"):
+                bill.payment_method = tool_input.get("payment_method")
+            await db.commit()
+            await db.refresh(bill)
+            return {
+                "ok": True,
+                "bill_id": str(bill.id),
+                "status": str(bill.status),
+                "paid_date": bill.paid_date.isoformat() if bill.paid_date else None,
+                "due_date": bill.due_date.isoformat() if bill.due_date else None,
+                "total_amount": str(bill.total_amount) if bill.total_amount is not None else None,
+            }
+
         if name == "query_expenses":
             year = tool_input.get("fiscal_year")
             year = int(year) if year else None
@@ -1087,8 +1240,6 @@ async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentCont
             }
 
         if name == "get_insights":
-            from datetime import date
-
             year = tool_input.get("fiscal_year")
             year = int(year) if year else date.today().year
             return {

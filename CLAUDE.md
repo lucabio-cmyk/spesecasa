@@ -30,7 +30,9 @@ soggetto e archivia.
   originale archiviato — PDF/immagine — per analizzarlo di nuovo su richiesta),
   `save_document` (header), `add_expenses` (righe/movimenti), `record_expense`
   (spesa da chat), `find_expenses`/`delete_expense` (ricerca e cancellazione
-  spesa da chat), `save_bill`/`record_bill` (bollette di casa), `query_expenses`
+  spesa da chat), `save_bill`/`record_bill` (bollette di casa),
+  `find_bills`/`update_bill` (ricerca di una bolletta/rata esistente — anche se
+  già pagata — e aggiornamento per stato/pagamento senza duplicare), `query_expenses`
   (aggregati + opzioni `include_monthly`/`include_top_merchants`/`include_comparison`),
   `query_bills` (costi/andamento/scadenzario + `include_monthly`),
   `get_yearly_summary`, `get_insights` (osservazioni automatiche sull'anno),
@@ -44,11 +46,25 @@ soggetto e archivia.
   internet, condominio, ...), valutazione costi (consumi, costo unitario,
   andamento) e amministrazione (scadenzario, stato pagamento). Quando un
   documento è una bolletta l'agente usa `save_bill` invece di `add_expenses`,
-  per evitare doppi conteggi e abilitare l'analisi dedicata. Nella dashboard le
-  **spese condominiali** (`utility_type=condominio`) sono tenute distinte dalle
-  **bollette delle utenze**: `bills_service.overview` espone totali separati
-  (`utilities_total`/`condo_total`) e `stats.by_category` le mostra come due
-  categorie ("Bollette / utenze" e "Spese condominiali").
+  per evitare doppi conteggi e abilitare l'analisi dedicata. Le **spese
+  condominiali** (`utility_type=condominio`) NON sono bollette di un'utenza:
+  hanno natura diversa (quote ordinarie/straordinarie, rate, fondo lavori) e
+  vanno tenute distinte. Si registrano comunque con `save_bill`/`record_bill`
+  (che gestiscono in generale le "spese di casa", non solo le bollette) per
+  condividere costi e scadenze, ma restano una categoria a sé: nella dashboard
+  `bills_service.overview` espone totali separati (`utilities_total`/`condo_total`,
+  mai sommati tra loro) e `stats.by_category` le mostra come due categorie
+  ("Bollette / utenze" e "Spese condominiali"). **Spese / rate già programmate
+  (scadenzario)**: quando un documento programma pagamenti futuri (piano rate
+  condominiali, rateizzazione fattura/F24, avviso/bollettino con scadenza,
+  bolletta non pagata) l'agente registra OGNI rata come `Bill` separata con la
+  propria `due_date` e `status` (`da_pagare`/`pagata`/`scaduta`/`rateizzata`),
+  senza accorparle né duplicare scadenze già presenti, così da alimentare lo
+  scadenzario (`query_bills`/`bills_service` con `include_upcoming`). Una rata
+  prima programmata e poi pagata è la stessa voce: l'agente la ritrova con
+  `find_bills` (che restituisce anche le voci già pagate, a differenza di
+  `query_bills include_upcoming` limitato agli stati aperti) e ne aggiorna stato
+  e `paid_date` con `update_bill`, senza creare una seconda registrazione.
 - **Condominio, verbali di assemblea e unità immobiliari**
   (`app/models/property_unit.py`, sezione CONDOMINIO del system prompt, tool
   `list_property_units`): il nucleo configura le proprie unità immobiliari
