@@ -296,13 +296,17 @@ TOOLS = [
     {
         "name": "save_bill",
         "description": (
-            "Registra una BOLLETTA / spesa di casa ricorrente (luce, gas, acqua, "
-            "rifiuti/TARI, internet/telefono, riscaldamento, condominio, ...) estratta "
-            "dal documento in elaborazione. Usalo per le bollette al posto di add_expenses, "
-            "per abilitare valutazione dei costi (consumi, costo unitario, andamento) e "
-            "amministrazione (scadenze, stato pagamento). Estrai periodo di competenza, "
-            "scadenza, importo totale e, se presenti, consumo con unità (kWh/Smc/m³) e "
-            "scomposizione del costo. Non inventare i valori mancanti."
+            "Registra una BOLLETTA dell'utenza (luce, gas, acqua, rifiuti/TARI, "
+            "internet/telefono, riscaldamento) o un'altra SPESA DI CASA ricorrente "
+            "estratta dal documento in elaborazione. Gestisce anche le SPESE "
+            "CONDOMINIALI (utility_type=condominio), che NON sono bollette di un'utenza "
+            "ma vengono registrate qui per condividere la gestione di costi e scadenze e "
+            "restano una categoria distinta. Usalo al posto di add_expenses per abilitare "
+            "valutazione dei costi (consumi, costo unitario, andamento) e amministrazione "
+            "(scadenze, stato pagamento). Estrai periodo di competenza, scadenza, importo "
+            "totale e, se presenti, consumo con unità (kWh/Smc/m³) e scomposizione del "
+            "costo. Per i pagamenti futuri/rateali registra ogni rata come voce separata "
+            "con la sua due_date e il suo stato. Non inventare i valori mancanti."
         ),
         "input_schema": {
             "type": "object",
