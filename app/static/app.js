@@ -352,6 +352,7 @@ const NAV = [
   { id: "documents", icon: "🗂️", label: "Archivio" },
   { id: "revisione", icon: "🔍", label: "Revisione" },
   { id: "expenses", icon: "💶", label: "Spese" },
+  { id: "supermercato", icon: "🛒", label: "Supermercato" },
   { id: "bills", icon: "🏠", label: "Casa & Bollette" },
   { id: "chat", icon: "💬", label: "Assistente" },
   { id: "settings", icon: "⚙️", label: "Impostazioni" },
@@ -423,6 +424,7 @@ function navigate(view) {
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
     revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
+    supermercato: ["Supermercato", "Analisi approfondita della spesa al supermercato: reparti, esercenti e andamento"],
     farmaci: ["Farmaci", "Catalogo dei medicinali acquistati · riservato all'amministratore"],
     bills: ["Casa & Bollette", "Riconoscimento bollette, valutazione costi e scadenze di pagamento"],
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
@@ -433,7 +435,7 @@ function navigate(view) {
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, supermercato: viewSupermercato, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -1480,6 +1482,275 @@ async function runReview(btn) {
   } catch (err) {
     toast("Errore", { desc: err.message, type: "err" });
     if (btn) { btn.disabled = false; btn.innerHTML = "🔍 Verifica ora"; }
+  }
+}
+
+/* ---------- View: Supermercato (analisi approfondita) ---------- */
+let smData = null;
+let smFilters = {};
+
+const SM_DIMS = {
+  month: {
+    label: "Mese",
+    key: (r) => r.purchase_date ? parseInt(String(r.purchase_date).split("-")[1], 10) : 0,
+    text: (k) => (Number(k) ? MONTHS_FULL[Number(k)] : "Senza data"),
+  },
+  category: {
+    label: "Reparto",
+    key: (r) => r.merch_category || "n/d",
+    text: (k) => (k === "n/d" ? "Senza reparto" : k),
+  },
+  payer: {
+    label: "Pagante",
+    key: (r) => r.payer_user_id || "",
+    text: (k) => (k ? memberName(k) : "Non attribuito"),
+  },
+  merchant: {
+    label: "Supermercato",
+    key: (r) => r.merchant || "",
+    text: (k) => (k || "Senza esercente"),
+  },
+};
+
+let smExpenses = [];
+let smYear = null;
+
+function smMatches(row, except) {
+  for (const dim of Object.keys(smFilters)) {
+    if (dim === except) continue;
+    if (String(SM_DIMS[dim].key(row)) !== String(smFilters[dim])) return false;
+  }
+  return true;
+}
+
+function smAggregate(dim) {
+  const D = SM_DIMS[dim];
+  const map = new Map();
+  for (const r of smExpenses) {
+    if (!smMatches(r, dim)) continue;
+    const k = String(D.key(r));
+    let e = map.get(k);
+    if (!e) { e = { key: k, label: D.text(k), value: 0, count: 0 }; map.set(k, e); }
+    e.value += Number(r.line_amount || 0);
+    e.count++;
+  }
+  const out = [...map.values()];
+  if (dim === "month") out.sort((a, b) => Number(a.key) - Number(b.key));
+  else out.sort((a, b) => b.value - a.value);
+  return out;
+}
+
+function smToggle(dim, val) {
+  if (String(smFilters[dim]) === String(val)) delete smFilters[dim];
+  else smFilters[dim] = String(val);
+  smRender();
+}
+
+function smBars(dim, { limit = 0 } = {}) {
+  let rows = smAggregate(dim);
+  if (limit && rows.length > limit) rows = rows.slice(0, limit);
+  if (!rows.length) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
+  const sel = smFilters[dim];
+  const max = Math.max(...rows.map(r => r.value), 1);
+  return rows.map((r, i) => {
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<div class="bar-row bar-clickable sm-bar${cls}" data-sm-dim="${dim}" data-sm-val="${esc(r.key)}" role="button" tabindex="0" title="${esc(r.label)} · ${eur(r.value)} · ${r.count} voc${r.count === 1 ? "e" : "i"}">
+        <span class="lbl">${esc(r.label)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${Math.max(2, (r.value / max) * 100)}%;background:${PALETTE[i % PALETTE.length]}"></div></div>
+        <span class="amt">${eur(r.value)}</span>
+      </div>`;
+  }).join("");
+}
+
+function smDonut(dim) {
+  const rows = smAggregate(dim);
+  const total = rows.reduce((s, r) => s + r.value, 0);
+  if (!total) return `<div class="empty"><div class="big">📭</div><p>Nessun dato.</p></div>`;
+  const sel = smFilters[dim];
+  const R = 70, C = 2 * Math.PI * R; let off = 0;
+  const segs = rows.map((r, i) => {
+    const frac = r.value / total;
+    const dash = `${frac * C} ${C - frac * C}`;
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    const seg = `<circle class="seg-clickable sm-seg${cls}" data-sm-dim="${dim}" data-sm-val="${esc(r.key)}" r="${R}" cx="90" cy="90" fill="none" stroke="${PALETTE[i % PALETTE.length]}" stroke-width="24" stroke-dasharray="${dash}" stroke-dashoffset="${-off * C}" transform="rotate(-90 90 90)"></circle>`;
+    off += frac; return seg;
+  }).join("");
+  const legend = rows.map((r, i) => {
+    const isSel = sel !== undefined && String(sel) === r.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<span class="leg-clickable sm-leg${cls}" data-sm-dim="${dim}" data-sm-val="${esc(r.key)}" role="button" tabindex="0"><i class="dot" style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(r.label)} · <b>${eur(r.value)}</b> <small>(${r.count})</small></span>`;
+  }).join("");
+  return `<div class="donut-wrap">
+    <svg viewBox="0 0 180 180" width="180" height="180" style="flex-shrink:0">${segs}
+      <text x="90" y="84" text-anchor="middle" font-size="13" fill="var(--text-faint)">Totale</text>
+      <text x="90" y="104" text-anchor="middle" font-size="17" font-weight="800" fill="var(--text)">${eur(total)}</text>
+    </svg>
+    <div class="legend" style="flex-direction:column;gap:8px">${legend}</div></div>`;
+}
+
+function smMonthChart() {
+  const agg = smAggregate("month");
+  const byKey = Object.fromEntries(agg.map(r => [r.key, r]));
+  const sel = smFilters.month;
+  const months = Array.from({ length: 12 }, (_, i) => byKey[String(i + 1)] || { key: String(i + 1), value: 0, count: 0 });
+  const max = Math.max(...months.map(m => m.value), 1);
+  const cols = months.map((m, i) => {
+    const h = Math.max(0, (m.value / max) * 100);
+    const isSel = sel !== undefined && String(sel) === m.key;
+    const cls = sel === undefined ? "" : (isSel ? " sel" : " dim");
+    return `<div class="col-item col-clickable sm-col${cls}" data-sm-dim="month" data-sm-val="${m.key}" role="button" tabindex="0" title="${MONTHS_FULL[i + 1]}: ${eur(m.value)} · ${m.count} voc${m.count === 1 ? "e" : "i"}">
+        <div class="col-bars">
+          <div class="col-amt">${eurShort(m.value)}</div>
+          <div class="col-stack"><div class="col-seg" style="height:${h}%;background:${COL_EXP_COLOR}"></div></div>
+        </div>
+        <div class="col-lbl">${MONTHS_FULL[i + 1].slice(0, 3)}</div>
+      </div>`;
+  }).join("");
+  return `<div class="col-chart">${cols}</div>`;
+}
+
+function smMonthStats() {
+  const agg = smAggregate("month");
+  const active = agg.filter(m => Number(m.key) && m.value > 0);
+  const total = active.reduce((s, m) => s + m.value, 0);
+  const avg = active.length ? total / active.length : 0;
+  const peak = active.reduce((a, m) => (m.value > (a?.value || 0) ? m : a), null);
+  return `<div class="mini-stats">
+      <div><span class="hint">Totale</span><b>${eur(total)}</b></div>
+      <div><span class="hint">Media mensile</span><b>${eur(avg)}</b><span class="hint">${active.length} mes${active.length === 1 ? "e" : "i"} con spesa</span></div>
+      <div><span class="hint">Mese di picco</span><b>${peak ? MONTHS_FULL[Number(peak.key)] : "—"}</b>${peak ? `<span class="hint">${eur(peak.value)}</span>` : ""}</div>
+    </div>`;
+}
+
+function smSlicers() {
+  const keys = Object.keys(smFilters);
+  if (!keys.length) {
+    return `<div class="slicers"><span class="hint">💡 Clicca su una barra, una colonna o uno spicchio per filtrare tutta la pagina.</span></div>`;
+  }
+  const chips = keys.map(dim => {
+    const D = SM_DIMS[dim];
+    return `<span class="slicer-chip"><span class="dim-lbl">${esc(D.label)}</span>${esc(D.text(smFilters[dim]))}<span class="x" data-sm-remove="${dim}" role="button" tabindex="0" title="Rimuovi filtro">✕</span></span>`;
+  }).join("");
+  return `<div class="slicers">${chips}
+      <button class="btn btn-ghost btn-sm" data-sm-clear>Azzera filtri</button>
+      <button class="btn btn-ghost btn-sm" data-sm-open>Apri nelle Spese ↗</button>
+    </div>`;
+}
+
+function smOpenInExpenses() {
+  const f = defaultExpFilters();
+  f.fiscal_year = smYear ? String(smYear) : "";
+  f.group = "spesa supermercato";
+  if (smFilters.month) f.month = String(smFilters.month);
+  if (smFilters.category) f.category = smFilters.category;
+  if (smFilters.payer) f.payer_user_id = smFilters.payer;
+  if (smFilters.merchant) f.q = smFilters.merchant;
+  expFilters = f;
+  navigate("expenses");
+}
+
+function smBindClicks(root) {
+  root.querySelectorAll("[data-sm-dim][data-sm-val]").forEach(el => {
+    const fire = () => smToggle(el.dataset.smDim, el.dataset.smVal);
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+  root.querySelectorAll("[data-sm-remove]").forEach(el => {
+    const fire = () => { delete smFilters[el.dataset.smRemove]; smRender(); };
+    el.addEventListener("click", fire);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
+  });
+  root.querySelector("[data-sm-clear]")?.addEventListener("click", () => { smFilters = {}; smRender(); });
+  root.querySelector("[data-sm-open]")?.addEventListener("click", smOpenInExpenses);
+}
+
+function smCompareCard() {
+  if (!smData?.compare) return "";
+  const cmp = smData.compare;
+  const rows = cmp.by_category.filter(r => r.current > 0 || r.previous > 0);
+  if (!rows.length && !cmp.previous_total) return "";
+  const head = `<span class="hint">${eur(cmp.current_total)} vs ${eur(cmp.previous_total)} · ${cmp.delta >= 0 ? "+" : ""}${eur(cmp.delta)}</span> ${pctBadge(cmp.delta_pct)}`;
+  const body = rows.length ? `<div class="table-wrap"><table class="data">
+      <thead><tr><th>Reparto</th><th class="num">${cmp.year}</th><th class="num">${cmp.previous_year}</th><th class="num">Var.</th></tr></thead>
+      <tbody>${rows.map(r => `<tr>
+          <td>${esc(r.category)}</td>
+          <td class="num">${eur(r.current)}</td>
+          <td class="num" style="color:var(--text-soft)">${eur(r.previous)}</td>
+          <td class="num">${pctBadge(r.delta_pct)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>` : `<div class="empty"><div class="big">📭</div><p>Nessun dato per l'anno precedente.</p></div>`;
+  return chartCard(`Confronto ${cmp.previous_year} → ${cmp.year}`, body, { action: head, style: "margin-top:16px" });
+}
+
+function smRender() {
+  const c = $("#content");
+  if (!c) return;
+  const filtered = smExpenses.filter(r => smMatches(r, null));
+  const total = filtered.reduce((s, r) => s + Number(r.line_amount || 0), 0);
+  const nFilters = Object.keys(smFilters).length;
+  const reparti = new Set(filtered.map(r => r.merch_category || "n/d")).size;
+  const avg = filtered.length ? total / filtered.length : 0;
+
+  const kpis = [
+    { label: nFilters ? "Spesa filtrata" : `Supermercato ${smYear}`, value: eur(total), icon: "🛒", bg: "var(--teal-100)", fg: "var(--teal-800)", delta: nFilters ? `${nFilters} filtr${nFilters === 1 ? "o" : "i"}` : `spesa totale dell'anno` },
+    { label: "Articoli", value: filtered.length, icon: "🧾", bg: "var(--blue-100)", fg: "#1d4ed8", delta: `su ${smExpenses.length} totali` },
+    { label: "Reparti", value: reparti, icon: "🗂️", bg: "var(--amber-100)", fg: "#b45309", delta: "reparti distinti" },
+    { label: "Scontrino medio", value: smData?.avg_basket ? eur(smData.avg_basket) : eur(avg), icon: "📐", bg: "var(--green-100)", fg: "#15803d", delta: smData?.n_receipts ? `su ${smData.n_receipts} scontrini` : "importo medio per voce" },
+  ];
+
+  const tableRows = filtered.slice().sort((a, b) => (b.purchase_date || "").localeCompare(a.purchase_date || "")).slice(0, 200);
+  const table = filtered.length ? `<div class="table-wrap"><table class="data">
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Reparto</th><th>Esercente</th><th>Pagante</th><th class="num">Importo</th></tr></thead>
+      <tbody>${tableRows.map(r => `<tr>
+          <td class="mono">${fmtDate(r.purchase_date)}</td>
+          <td>${esc(r.description_normalized || r.description_original || "—")}</td>
+          <td>${esc(r.merch_category || "—")}</td>
+          <td>${esc(r.merchant || "—")}</td>
+          <td>${esc(r.payer_user_id ? memberName(r.payer_user_id) : "—")}</td>
+          <td class="num">${eur(r.line_amount)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>${filtered.length > 200 ? `<p class="hint" style="margin-top:10px">Primi 200 di ${filtered.length} articoli.</p>` : ""}`
+    : `<div class="empty"><div class="big">📭</div><p>Nessun articolo per i filtri selezionati.</p></div>`;
+
+  c.innerHTML = `
+    ${smSlicers()}
+    ${kpiGrid(kpis)}
+    ${chartCard(`Andamento mensile ${smYear}`, smMonthStats() + smMonthChart(), { sub: "Spesa al supermercato per mese · clicca per filtrare", style: "margin-top:16px" })}
+    <div class="grid cols-2" style="margin-top:16px">
+      ${chartCard("Spesa per reparto", smDonut("category"), { sub: "Clicca uno spicchio per filtrare" })}
+      ${chartCard("Spesa per pagante", smBars("payer"), { sub: "Chi fa la spesa" })}
+    </div>
+    ${chartCard("Dove fai la spesa", smBars("merchant", { limit: 10 }), { sub: "Supermercati per importo · clicca per filtrare", style: "margin-top:16px" })}
+    ${smCompareCard()}
+    ${chartCard(`Dettaglio articoli ${nFilters ? "filtrati" : smYear}`, table, { action: `<b>${eur(total)}</b>`, style: "margin-top:16px" })}`;
+
+  smBindClicks(c);
+}
+
+async function viewSupermercato() {
+  const c = $("#content");
+  c.innerHTML = skeletonGrid();
+  $("#topbar-actions").innerHTML = "";
+  $("#topbar-actions").appendChild(await yearSelector(viewSupermercato));
+  smYear = State.year || new Date().getFullYear();
+  smFilters = {};
+  try {
+    const [stats, expenses] = await Promise.all([
+      api(`/stats/supermarket?year=${smYear}`),
+      api(`/expenses?group=spesa+supermercato&fiscal_year=${smYear}`),
+    ]);
+    smData = stats;
+    smExpenses = expenses;
+    if (!smExpenses.length) {
+      c.innerHTML = emptyBox("🛒", "Nessuna spesa al supermercato", `Non ci sono voci di spesa al supermercato per il ${smYear}. Carica scontrini della spesa o registrali con l'assistente.`, "Carica documento", "upload");
+      bindEmpty(c);
+      return;
+    }
+    smRender();
+  } catch (err) {
+    c.innerHTML = errorBox(err.message);
   }
 }
 

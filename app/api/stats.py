@@ -83,6 +83,15 @@ async def compare(user: CurrentUser, db: DB, year: int | None = None):
     )
 
 
+@router.get("/supermarket")
+async def supermarket(user: CurrentUser, db: DB, year: int | None = None):
+    """Analisi approfondita della spesa al supermercato: suddivisione per
+    reparto, andamento mensile, esercenti, confronto anno-su-anno."""
+    return await stats_service.supermarket_analysis(
+        db, user.household_id, year or date.today().year
+    )
+
+
 @router.get("/insights")
 async def insights(user: CurrentUser, db: DB, year: int | None = None):
     """Osservazioni automatiche sulla situazione di spesa del nucleo."""
