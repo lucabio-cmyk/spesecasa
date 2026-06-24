@@ -7,7 +7,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import auth, bills, chat, documents, expenses, household, review, stats
+from app.api import (
+    auth,
+    bills,
+    chat,
+    documents,
+    expenses,
+    household,
+    review,
+    stats,
+    storage_browser,
+)
 from app.config import settings
 
 logging.basicConfig(
@@ -100,6 +110,7 @@ app.include_router(bills.router)
 app.include_router(stats.router)
 app.include_router(chat.router)
 app.include_router(review.router)
+app.include_router(storage_browser.router)
 
 # Interfaccia web (SPA). Montata per ultima così le route API hanno la
 # precedenza; html=True serve index.html per le rotte client-side.
