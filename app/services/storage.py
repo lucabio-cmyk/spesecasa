@@ -42,7 +42,11 @@ class LocalStorage:
         src.replace(dest)
         # Pulizia best-effort delle directory rimaste vuote dopo lo spostamento.
         parent = src.parent
-        while parent != self.base and parent.is_dir():
+        while (
+            parent != self.base
+            and parent.is_relative_to(self.base)
+            and parent.is_dir()
+        ):
             try:
                 parent.rmdir()
             except OSError:
