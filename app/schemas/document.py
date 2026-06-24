@@ -87,3 +87,13 @@ class DocumentSearchHit(DocumentOut):
     similarità (0..1) presente solo per i risultati semantici."""
 
     score: float | None = None
+
+
+class ReorganizeResult(BaseModel):
+    """Esito del riordino dell'archivio esistente (sposta/rinomina i file già
+    elaborati nella struttura ordinata, senza richiamare l'agente)."""
+
+    examined: int  # documenti considerati
+    moved: int  # file effettivamente spostati/rinominati
+    skipped: int  # già ordinati o senza percorso
+    errors: int  # spostamenti falliti (best-effort, file lasciato dov'era)
