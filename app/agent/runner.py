@@ -12,6 +12,7 @@ from app.enums import DocumentStatus, FiscalClassification
 from app.models.document import Document
 from app.models.household import Household
 from app.models.property_unit import PropertyUnit
+from app.services import archive as archive_service
 from app.services import categories as categories_service
 from app.services.embeddings import index_document
 from app.services.llm import create_message, is_overloaded
@@ -270,6 +271,13 @@ async def process_document(
                 if document.fiscal_classification == FiscalClassification.DA_VERIFICARE
                 else DocumentStatus.COMPLETE
             )
+        # Riorganizza l'archivio: ora che i metadati sono estratti, rinomina il
+        # file con un nome parlante e lo sposta nella struttura di directory
+        # ordinata (anno/tipo). Best-effort: non deve far fallire la pipeline.
+        try:
+            archive_service.organize_document(document, get_storage())
+        except Exception:
+            pass
         await db.commit()
         # Indicizzazione semantica (best-effort: non deve far fallire la pipeline).
         try:

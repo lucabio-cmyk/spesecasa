@@ -98,8 +98,12 @@ async def upload_document(
     # Sanifica il nome file per evitare path traversal (es. "../../evil"):
     # si conserva solo il basename, normalizzando anche i separatori Windows.
     safe_name = Path((file.filename or "documento").replace("\\", "/")).name or "documento"
+    # Posizione di atterraggio temporanea: l'archivio "ordinato" (per anno/tipo
+    # con nome parlante) viene costruito a fine elaborazione dall'agente
+    # (app/services/archive.py). Finché un documento non è elaborato (o se
+    # fallisce) resta qui, nell'inbox, chiaramente separato dall'archivio pulito.
     year = datetime.now(timezone.utc).year
-    rel = f"{user.household_id}/{year}/{digest[:16]}_{safe_name}"
+    rel = f"{user.household_id}/_inbox/{year}/{digest[:16]}_{safe_name}"
     path = get_storage().save(rel, data)
 
     # Normalizza il MIME: alcuni browser inviano i fogli Excel come

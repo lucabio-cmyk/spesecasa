@@ -193,6 +193,24 @@ soggetto e archivia.
   scheduler periodico interno opzionale (`orchestrator_schedule_hours`, loop
   asyncio in `app/main.py`, off di default). Config in `app/config.py`.
 - **Storage** (`app/services/storage.py`): `LocalStorage` su volume; S3 da fare.
+- **Archivio ordinato (rinomina + struttura directory)**
+  (`app/services/archive.py`, `LocalStorage.move`): in upload il file atterra in
+  una posizione temporanea (`{household_id}/_inbox/{anno}/{hash}_{nome}` in
+  `app/api/documents.py`); a fine pipeline, quando i metadati sono estratti, il
+  runner chiama `archive.organize_document` che **rinomina** il file con un nome
+  parlante e lo **sposta** in una struttura ordinata
+  `{household_id}/{anno_fiscale}/{tipo_documento}/{data}_{emittente}_{importo}_{hash8}.ext`
+  (es. `.../2025/bolletta/2025-03-15_enel-energia_84-50eur_a1b2c3d4.pdf`),
+  aggiornando `Document.storage_path`. `slugify` rende sicuri i segmenti
+  (minuscolo, senza accenti/simboli); i campi mancanti (anno→`senza-anno`,
+  data→`data-ignota`, emittente/importo omessi) degradano con grazia.
+  Idempotente: una rielaborazione che cambia i metadati rimuove il file dalla
+  vecchia posizione (con pulizia delle directory vuote) e lo riposiziona; un
+  documento già ordinato non si muove. `_inbox` separa visibilmente i documenti
+  non ancora elaborati (o falliti) dall'archivio pulito. Best-effort: un errore
+  di I/O non fa fallire la pipeline (il file resta consultabile dal path
+  precedente). `original_filename` resta il nome caricato dall'utente (usato per
+  il download).
 - **Ricerca semantica** (`app/services/embeddings.py`, `app/services/search.py`):
   l'embedding del documento (header + sintesi + voci) è calcolato a fine pipeline
   (`index_document`) e salvato nella colonna `embedding` (pgvector, indice HNSW
