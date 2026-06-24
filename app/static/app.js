@@ -365,6 +365,10 @@ function navItems() {
   if (State.user?.role === "admin") {
     const i = items.findIndex(n => n.id === "supermercato");
     items.splice(i + 1, 0, { id: "farmaci", icon: "💊", label: "Farmaci" });
+    // L'archivio file grezzo è una vista di servizio per l'admin: lo
+    // mostriamo subito dopo l'Archivio documenti.
+    const d = items.findIndex(n => n.id === "documents");
+    items.splice(d + 1, 0, { id: "archivio", icon: "📁", label: "Archivio file" });
   }
   return items;
 }
@@ -422,6 +426,7 @@ function navigate(view) {
     analisi: ["Analisi", "Osservazioni, confronti e analisi interattiva: clicca i grafici per filtrare tutta la pagina (stile BI)"],
     upload: ["Carica documento", "Scontrini, fatture, ricevute: l'assistente AI li legge e li archivia"],
     documents: ["Archivio documenti", "Tutti i documenti caricati, con stato ed estrazione"],
+    archivio: ["Archivio file", "I file salvati su disco · navigazione e download · riservato all'amministratore"],
     revisione: ["Revisione", "Avvisi su dati incompleti e proposte di miglioramento da approvare"],
     expenses: ["Spese", "Movimenti e righe di dettaglio, correggibili al volo"],
     supermercato: ["Supermercato", "Analisi della spesa al supermercato: reparti, esercenti, andamento e confronto con l'anno precedente"],
@@ -430,12 +435,13 @@ function navigate(view) {
     chat: ["Assistente", "Registra spese descrivendole e interroga lo storico in linguaggio naturale"],
     settings: ["Impostazioni", "Nucleo, membri, immobili e addestramento dell'assistente"],
   };
-  // Difesa: la vista farmaci è solo per admin (il menu non la mostra agli altri).
-  if (view === "farmaci" && State.user?.role !== "admin") view = State.view = "dashboard";
+  // Difesa: farmaci e archivio file sono solo per admin (il menu non li mostra
+  // agli altri, ma blocchiamo anche la navigazione diretta).
+  if (["farmaci", "archivio"].includes(view) && State.user?.role !== "admin") view = State.view = "dashboard";
   $("#page-title").textContent = titles[view][0];
   $("#page-sub").textContent = titles[view][1];
   $("#topbar-actions").innerHTML = "";
-  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, revisione: viewRevisione, expenses: viewExpenses, supermercato: viewSupermercato, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
+  const views = { dashboard: viewDashboard, analisi: viewAnalisi, upload: viewUpload, documents: viewDocuments, archivio: viewArchivioFile, revisione: viewRevisione, expenses: viewExpenses, supermercato: viewSupermercato, farmaci: viewFarmaci, bills: viewBills, chat: viewChat, settings: viewSettings };
   views[view]();
 }
 
@@ -1903,6 +1909,92 @@ async function viewFarmaci() {
           </tr>`;
         }).join("")}</tbody></table></div>`;
   } catch (err) { c.innerHTML = privacy + errorBox(err.message); }
+}
+
+/* ---------- View: Archivio file (admin) ---------- */
+// Percorso corrente nell'esplorazione dello storage (relativo alla radice del
+// nucleo). Conservato a livello di modulo per il "torna su" e i breadcrumb.
+let archivioPath = "";
+
+function fmtBytes(n) {
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  const u = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function fmtTimestamp(ts) {
+  if (!ts) return "—";
+  try { return new Date(ts * 1000).toLocaleString("it-IT", { dateStyle: "short", timeStyle: "short" }); }
+  catch { return "—"; }
+}
+
+async function archivioOpen(path, download) {
+  // Scarica il file via API (JWT in header) e lo apre in anteprima o lo
+  // salva: un semplice link non porterebbe l'header di autenticazione.
+  try {
+    const res = await api(`/storage/file?path=${encodeURIComponent(path)}${download ? "&download=1" : ""}`, { raw: true });
+    const url = URL.createObjectURL(await res.blob());
+    if (download) {
+      const a = document.createElement("a");
+      a.href = url; a.download = path.split("/").pop() || "file";
+      document.body.appendChild(a); a.click(); a.remove();
+    } else {
+      window.open(url, "_blank");
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) { toast(err.message); }
+}
+
+async function viewArchivioFile() {
+  if (State.user?.role !== "admin") { navigate("dashboard"); return; }
+  const c = $("#content");
+  c.innerHTML = skeletonRows();
+  const note = `<div class="card card-pad" style="border-left:4px solid var(--teal-600, #0d9488);display:flex;gap:12px;align-items:center;margin-bottom:16px">
+      <span style="font-size:22px">📁</span>
+      <div><b>Archivio file su disco</b><div class="sub" style="color:var(--text-soft);font-size:13px">Navigazione in sola lettura dei file salvati dallo storage, limitata al tuo nucleo. Organizzati per anno: <code>anno / hash_nome-file</code>. Riservato all'amministratore.</div></div>
+    </div>`;
+  try {
+    const data = await api(`/storage/browse?path=${encodeURIComponent(archivioPath)}`);
+    archivioPath = data.path;
+    // Breadcrumb cliccabile dalla radice fino alla cartella corrente.
+    const segs = data.path ? data.path.split("/") : [];
+    let acc = "";
+    const crumbs = [`<a href="#" data-go="">🏠 Archivio</a>`].concat(segs.map(s => {
+      acc = acc ? `${acc}/${s}` : s;
+      return `<span class="sep">/</span><a href="#" data-go="${esc(acc)}">${esc(s)}</a>`;
+    })).join("");
+
+    const rows = data.entries.length ? data.entries.map(e => {
+      if (e.is_dir) {
+        return `<tr class="clickable" data-dir="${esc(e.path)}">
+          <td><span style="font-size:16px">📂</span> <b>${esc(e.name)}</b></td>
+          <td>Cartella</td><td class="num">—</td><td class="mono">${fmtTimestamp(e.modified)}</td>
+          <td class="num"></td></tr>`;
+      }
+      return `<tr>
+        <td><span style="font-size:16px">📄</span> ${esc(e.name)}</td>
+        <td>File</td><td class="num">${fmtBytes(e.size)}</td><td class="mono">${fmtTimestamp(e.modified)}</td>
+        <td class="num"><button class="btn btn-ghost btn-sm" data-view="${esc(e.path)}">Apri</button> <button class="btn btn-ghost btn-sm" data-dl="${esc(e.path)}">Scarica</button></td></tr>`;
+    }).join("") : `<tr><td colspan="5" class="hint" style="text-align:center;padding:24px">Cartella vuota</td></tr>`;
+
+    c.innerHTML = note + `
+      <div class="row between" style="margin-bottom:12px">
+        <div class="breadcrumb" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${crumbs}</div>
+        ${data.parent !== null ? `<button class="btn btn-ghost btn-sm" data-go="${esc(data.parent)}">⬆️ Su</button>` : ""}
+      </div>
+      <div class="card table-wrap"><table class="data">
+        <thead><tr><th>Nome</th><th>Tipo</th><th class="num">Dimensione</th><th>Modificato</th><th class="num">Azioni</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+
+    const go = p => { archivioPath = p; viewArchivioFile(); };
+    c.querySelectorAll("[data-dir]").forEach(el => el.addEventListener("click", () => go(el.dataset.dir)));
+    c.querySelectorAll("[data-go]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); go(el.dataset.go); }));
+    c.querySelectorAll("[data-view]").forEach(el => el.addEventListener("click", () => archivioOpen(el.dataset.view, false)));
+    c.querySelectorAll("[data-dl]").forEach(el => el.addEventListener("click", () => archivioOpen(el.dataset.dl, true)));
+  } catch (err) { c.innerHTML = note + errorBox(err.message); }
 }
 
 /* ---------- View: Casa & Bollette ---------- */
