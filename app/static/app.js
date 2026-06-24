@@ -1934,6 +1934,10 @@ function fmtTimestamp(ts) {
 async function archivioOpen(path, download) {
   // Scarica il file via API (JWT in header) e lo apre in anteprima o lo
   // salva: un semplice link non porterebbe l'header di autenticazione.
+  // La scheda di anteprima va aperta SUBITO (in modo sincrono): dopo l'await
+  // window.open() verrebbe bloccato dal popup blocker del browser.
+  const tab = download ? null : window.open("", "_blank");
+  if (tab) tab.document.write("<p style='font-family:sans-serif;color:#666;text-align:center;margin-top:48px'>Caricamento del file…</p>");
   try {
     const res = await api(`/storage/file?path=${encodeURIComponent(path)}${download ? "&download=1" : ""}`, { raw: true });
     const url = URL.createObjectURL(await res.blob());
@@ -1942,10 +1946,10 @@ async function archivioOpen(path, download) {
       a.href = url; a.download = path.split("/").pop() || "file";
       document.body.appendChild(a); a.click(); a.remove();
     } else {
-      window.open(url, "_blank");
+      tab.location.href = url;
     }
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (err) { toast(err.message); }
+  } catch (err) { if (tab) tab.close(); toast(err.message); }
 }
 
 async function viewArchivioFile() {
@@ -1994,7 +1998,12 @@ async function viewArchivioFile() {
     c.querySelectorAll("[data-go]").forEach(el => el.addEventListener("click", ev => { ev.preventDefault(); go(el.dataset.go); }));
     c.querySelectorAll("[data-view]").forEach(el => el.addEventListener("click", () => archivioOpen(el.dataset.view, false)));
     c.querySelectorAll("[data-dl]").forEach(el => el.addEventListener("click", () => archivioOpen(el.dataset.dl, true)));
-  } catch (err) { c.innerHTML = note + errorBox(err.message); }
+  } catch (err) {
+    // Reset del percorso: se quello corrente non è valido (es. cambio utente),
+    // evitiamo di restare bloccati ricaricando sempre lo stesso path errato.
+    archivioPath = "";
+    c.innerHTML = note + errorBox(err.message);
+  }
 }
 
 /* ---------- View: Casa & Bollette ---------- */

@@ -7,10 +7,12 @@ risolti e validati contro la radice per impedire path traversal (`..`).
 """
 
 import mimetypes
+import stat
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.config import settings
@@ -60,13 +62,20 @@ async def browse(user: AdminUser, path: str = ""):
     if not target.is_dir():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cartella non trovata")
 
-    entries: list[StorageEntry] = []
-    for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+    # Una sola stat() per voce: ricaviamo da lì sia il tipo (S_ISDIR) sia
+    # dimensione/mtime, evitando syscall ridondanti su cartelle affollate.
+    raw: list[tuple[Path, object]] = []
+    for child in target.iterdir():
         try:
-            st = child.stat()
+            raw.append((child, child.stat()))
         except OSError:
             continue
-        is_dir = child.is_dir()
+    # Ordine: prima le cartelle, poi i file, entrambi per nome case-insensitive.
+    raw.sort(key=lambda x: (not stat.S_ISDIR(x[1].st_mode), x[0].name.lower()))
+
+    entries: list[StorageEntry] = []
+    for child, st in raw:
+        is_dir = stat.S_ISDIR(st.st_mode)
         entries.append(
             StorageEntry(
                 name=child.name,
@@ -93,9 +102,11 @@ async def get_file(user: AdminUser, path: str, download: bool = False):
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File non trovato")
     mime, _ = mimetypes.guess_type(target.name)
-    disposition = "attachment" if download else "inline"
-    return Response(
-        content=target.read_bytes(),
+    # FileResponse trasmette il file a chunk (no caricamento integrale in
+    # memoria) e codifica correttamente il filename (RFC 5987).
+    return FileResponse(
+        path=target,
         media_type=mime or "application/octet-stream",
-        headers={"Content-Disposition": f'{disposition}; filename="{target.name}"'},
+        filename=target.name,
+        content_disposition_type="attachment" if download else "inline",
     )
