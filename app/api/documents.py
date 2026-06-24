@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from sqlalchemy import delete, select
 
 from app.database import SessionLocal
-from app.deps import DB, CurrentUser
+from app.deps import DB, AdminUser, CurrentUser
 from app.enums import DocumentStatus, DocumentType
 from app.models.document import Document
 from app.models.expense import Expense
@@ -17,9 +17,11 @@ from app.schemas.document import (
     DocumentOut,
     DocumentSearchHit,
     DocumentUpdate,
+    ReorganizeResult,
     ReprocessRequest,
 )
 from app.schemas.expense import ExpenseOut
+from app.services import archive as archive_service
 from app.services import search as search_service
 from app.services.resolvers import (
     member_belongs_to_household,
@@ -271,6 +273,46 @@ async def reprocess(
     bg.add_task(_process, doc.id, instruction)
     await db.refresh(doc)
     return doc
+
+
+@router.post("/reorganize", response_model=ReorganizeResult)
+async def reorganize_archive(user: AdminUser, db: DB):
+    """Riordina l'archivio ESISTENTE: sposta e rinomina i documenti già
+    elaborati nella struttura ordinata (anno/tipo + nome parlante), senza
+    richiamare l'agente. Utile per allineare lo storico caricato prima
+    dell'introduzione dell'archivio ordinato. Riservato all'amministratore.
+
+    Best-effort e idempotente: i file già al posto giusto non si muovono, un
+    errore di I/O su un documento non blocca gli altri (il file resta dov'era)."""
+    storage = get_storage()
+    res = await db.execute(
+        select(Document).where(
+            Document.household_id == user.household_id,
+            Document.status.in_(
+                [DocumentStatus.COMPLETE, DocumentStatus.NEEDS_REVIEW]
+            ),
+        )
+    )
+    examined = moved = skipped = errors = 0
+    for doc in res.scalars():
+        examined += 1
+        if not doc.storage_path:
+            skipped += 1
+            continue
+        try:
+            new_abs = storage.move(doc.storage_path, archive_service.archive_relpath(doc))
+        except Exception:
+            errors += 1
+            continue
+        if new_abs != doc.storage_path:
+            doc.storage_path = new_abs
+            moved += 1
+        else:
+            skipped += 1
+    await db.commit()
+    return ReorganizeResult(
+        examined=examined, moved=moved, skipped=skipped, errors=errors
+    )
 
 
 @router.delete("/{document_id}", status_code=204)

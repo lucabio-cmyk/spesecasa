@@ -210,7 +210,12 @@ soggetto e archivia.
   non ancora elaborati (o falliti) dall'archivio pulito. Best-effort: un errore
   di I/O non fa fallire la pipeline (il file resta consultabile dal path
   precedente). `original_filename` resta il nome caricato dall'utente (usato per
-  il download).
+  il download). **Backfill dello storico**: `POST /documents/reorganize` (solo
+  admin) riordina i documenti già elaborati (`complete`/`needs_review`)
+  riusando `archive.organize_document` senza richiamare l'agente — utile per lo
+  storico caricato prima dell'introduzione dell'archivio ordinato; idempotente e
+  best-effort, restituisce un conteggio (`examined`/`moved`/`skipped`/`errors`).
+  In GUI: Impostazioni → Manutenzione archivio.
 - **Ricerca semantica** (`app/services/embeddings.py`, `app/services/search.py`):
   l'embedding del documento (header + sintesi + voci) è calcolato a fine pipeline
   (`index_document`) e salvato nella colonna `embedding` (pgvector, indice HNSW
@@ -284,7 +289,8 @@ soggetto e archivia.
 - `documents`: `POST /documents` (upload+process in background), `GET /documents`
   (filtri), `GET /documents/search?q=` (ricerca semantica + fallback keyword),
   `GET /documents/{id}`, `GET /documents/{id}/file`,
-  `POST /documents/{id}/reprocess`.
+  `POST /documents/{id}/reprocess`, `POST /documents/reorganize` (admin: riordina
+  l'archivio esistente, vedi Architettura → Archivio ordinato).
 - `expenses`: `GET/POST /expenses`, `PATCH /expenses/{id}` (correzione/verifica),
   `GET /expenses/farmaci` (catalogo medicinali, **solo admin**). `GET /expenses`
   nasconde la categoria `farmaci` ai non-admin (dato sanitario sensibile).

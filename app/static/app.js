@@ -2366,7 +2366,13 @@ async function viewSettings() {
         <p class="hint" style="margin-bottom:14px">Istruzioni libere che l'assistente seguirà per questo nucleo: convenzioni, come trattare casi ricorrenti, quale unità considerare di default per il condominio, preferenze di classificazione. Vengono aggiunte al suo contesto.</p>
         <textarea class="input" id="agent-instructions" rows="6" placeholder="Es. La nostra unità nel condominio Aurora è l'interno 5, intestata a Mario Rossi. Per le bollette del gas considerare la seconda casa solo se citato 'Via Verdi'." ${isAdmin ? "" : "disabled"}>${esc(hh.agent_instructions || "")}</textarea>
         ${isAdmin ? `<div class="row" style="margin-top:12px;justify-content:flex-end"><button class="btn btn-primary btn-sm" id="save-instructions">Salva istruzioni</button></div>` : `<p class="hint" style="margin-top:10px">Solo l'amministratore può modificare l'addestramento.</p>`}
-      </div>`;
+      </div>
+
+      ${isAdmin ? `<div class="card card-pad" style="margin-top:16px">
+        <h3 style="margin-bottom:6px">🗂️ Manutenzione archivio</h3>
+        <p class="hint" style="margin-bottom:14px">Riordina l'archivio dei documenti <b>già elaborati</b>: rinomina i file con un nome parlante (data, emittente, importo) e li sposta nella struttura ordinata per anno e tipo. Utile per allineare lo storico caricato prima dell'introduzione dell'archivio ordinato. Non richiama l'assistente e non modifica i dati: sposta solo i file. È sicuro rilanciarlo (i file già a posto non si muovono).</p>
+        <div class="row between"><span class="hint" id="reorg-status"></span><button class="btn btn-ghost btn-sm" id="reorg-archive">Riordina archivio</button></div>
+      </div>` : ""}`;
 
     $("#copy-id")?.addEventListener("click", () => { navigator.clipboard.writeText(hh.id); toast("ID copiato", { type: "ok", timeout: 1500 }); });
     $("#add-member")?.addEventListener("click", addMemberDialog);
@@ -2401,6 +2407,20 @@ async function viewSettings() {
       const val = $("#agent-instructions").value;
       try { await api("/household", { method: "PATCH", body: { agent_instructions: val } }); toast("Addestramento salvato", { type: "ok" }); }
       catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+    });
+    $("#reorg-archive")?.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      const status = $("#reorg-status");
+      btn.disabled = true; const prev = btn.textContent; btn.textContent = "Riordino…";
+      if (status) status.textContent = "";
+      try {
+        const r = await api("/documents/reorganize", { method: "POST" });
+        const parts = [`${r.moved} spostati`, `${r.skipped} già a posto`];
+        if (r.errors) parts.push(`${r.errors} errori`);
+        if (status) status.textContent = `${r.examined} documenti esaminati · ${parts.join(" · ")}`;
+        toast(r.moved ? `Archivio riordinato: ${r.moved} file` : "Archivio già ordinato", { type: r.errors ? "warn" : "ok" });
+      } catch (e) { toast("Errore", { desc: e.message, type: "err" }); }
+      finally { btn.disabled = false; btn.textContent = prev; }
     });
   } catch (err) { c.innerHTML = errorBox(err.message); }
 }
