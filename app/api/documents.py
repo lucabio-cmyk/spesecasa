@@ -21,16 +21,25 @@ from app.schemas.document import (
     ReprocessRequest,
 )
 from app.schemas.expense import ExpenseOut
+from app.config import settings
 from app.services import archive as archive_service
+from app.services import ratelimit
 from app.services import search as search_service
 from app.services.resolvers import (
     member_belongs_to_household,
     payment_method_belongs_to_household,
 )
-from app.services.spreadsheets import normalize_mime
+from app.services.spreadsheets import _SPREADSHEET_MIMES, normalize_mime
 from app.services.storage import file_hash, get_storage
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+# Tipi di file accettati in upload: PDF, immagini gestite nativamente dal
+# modello e fogli di calcolo Excel (convertiti in testo). Qualunque altro tipo
+# viene rifiutato: evita che `file_to_content_block` tratti un file arbitrario
+# come PDF e riduce la superficie d'attacco.
+_ALLOWED_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_ALLOWED_UPLOAD_MIMES = {"application/pdf"} | _ALLOWED_IMAGE_MIMES | _SPREADSHEET_MIMES
 
 
 async def _process(
@@ -82,7 +91,48 @@ async def upload_document(
     Verifica anti-duplicazione: se lo stesso file (identico hash) è già presente
     nell'archivio del nucleo, NON viene ricaricato; si risponde 200 con il
     documento esistente e l'header `X-Document-Duplicate: 1`."""
-    data = await file.read()
+    # Frena l'abuso: ogni upload avvia una pipeline AI (potenzialmente costosa).
+    await ratelimit.enforce(
+        f"upload:{user.id}",
+        settings.rate_limit_upload,
+        settings.rate_limit_upload_window,
+    )
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    # Rifiuta subito i file troppo grandi se la dimensione è nota, senza leggerli
+    # in memoria (il file viene comunque caricato in RAM: proteggersi è d'obbligo).
+    if file.size is not None and file.size > max_bytes:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"File troppo grande: massimo {settings.max_upload_mb} MB.",
+        )
+
+    # Normalizza e valida il MIME PRIMA di leggere/salvare il file.
+    mime_type = normalize_mime(file.filename, file.content_type)
+    if mime_type not in _ALLOWED_UPLOAD_MIMES:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Tipo di file non supportato: carica un PDF, un'immagine "
+            "(PNG/JPEG/GIF/WebP) o un foglio Excel (.xls/.xlsx).",
+        )
+
+    # Lettura a blocchi con stop progressivo: se la dimensione non è nota a
+    # priori (upload in streaming senza Content-Length) NON carichiamo l'intero
+    # payload in memoria prima di controllarlo, evitando un possibile OOM.
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1 MB per iterazione
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"File troppo grande: massimo {settings.max_upload_mb} MB.",
+            )
+        chunks.append(chunk)
+    data = b"".join(chunks)
     digest = file_hash(data)
 
     dup = await db.execute(
@@ -108,9 +158,6 @@ async def upload_document(
     rel = f"{user.household_id}/_inbox/{year}/{digest[:16]}_{safe_name}"
     path = get_storage().save(rel, data)
 
-    # Normalizza il MIME: alcuni browser inviano i fogli Excel come
-    # octet-stream; lo deduciamo dall'estensione per riconoscerli poi.
-    mime_type = normalize_mime(file.filename, file.content_type)
     doc = Document(
         household_id=user.household_id,
         uploaded_by_user_id=user.id,

@@ -62,6 +62,9 @@ async def _orchestrator_scheduler() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail-fast su segreti di default insicuri in produzione (JWT). Va fatto
+    # all'avvio, prima di servire richieste.
+    settings.validate_production_secrets()
     Path(settings.storage_dir).mkdir(parents=True, exist_ok=True)
     logger.info(
         "Applicazione avviata (env=%s, storage=%s, static=%s)",

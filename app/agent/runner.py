@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import date
 
 from anthropic import AsyncAnthropic
@@ -6,7 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.system_prompt import SYSTEM_PROMPT
-from app.agent.tools import TOOLS, AgentContext, dispatch, file_to_content_block
+from app.agent.tools import (
+    DOCUMENT_TOOLS,
+    TOOLS,
+    AgentContext,
+    dispatch,
+    file_to_content_block,
+)
 from app.config import settings
 from app.enums import DocumentStatus, FiscalClassification
 from app.models.document import Document
@@ -18,16 +25,21 @@ from app.services.embeddings import index_document
 from app.services.llm import create_message, is_overloaded
 from app.services.storage import get_storage
 
+logger = logging.getLogger(__name__)
+
 client = AsyncAnthropic(
     api_key=settings.anthropic_api_key, max_retries=settings.anthropic_max_retries
 )
 
 
-def _build_tools() -> list[dict]:
-    """Strumenti dell'app + (opzionale) ricerca web server-side per affinare e
-    verificare le regole fiscali aggiornate. La web_search è eseguita da
-    Anthropic: non richiede dispatch lato client."""
-    tools = list(TOOLS)
+def _build_tools(base_tools: list[dict]) -> list[dict]:
+    """Strumenti dell'app (il sottoinsieme passato) + (opzionale) ricerca web
+    server-side per affinare e verificare le regole fiscali aggiornate. La
+    web_search è eseguita da Anthropic: non richiede dispatch lato client.
+
+    L'ordine dei tool deve restare STABILE tra le chiamate: fa parte del prefisso
+    di prompt caching (i tool sono renderizzati prima di system)."""
+    tools = list(base_tools)
     if settings.enable_web_search:
         tools.append(
             {
@@ -41,6 +53,36 @@ def _build_tools() -> list[dict]:
             }
         )
     return tools
+
+
+def _mark_last_block_cacheable(messages: list[dict]) -> None:
+    """Sposta in avanti l'unico breakpoint di cache sui messaggi.
+
+    Il prompt caching è un match di prefisso: marcando l'ultimo blocco-dict
+    disponibile, ogni chiamata successiva rilegge dalla cache tutta la storia
+    precedente (documento in base64 incluso) invece di riprocessarla a prezzo
+    pieno. Si opera solo sui blocchi che costruiamo noi (dict); i blocchi di
+    risposta del modello sono oggetti e vengono ignorati."""
+    # Rimuove eventuali marcatori precedenti così il breakpoint resta unico e
+    # avanza col crescere della conversazione (max 4 breakpoint per richiesta).
+    # I messaggi con contenuto stringa (storia e turni di chat) vengono
+    # normalizzati a blocchi, altrimenti non sarebbero mai cacheabili.
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            m["content"] = content
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+    for m in reversed(messages):
+        content = m.get("content")
+        if isinstance(content, list):
+            for block in reversed(content):
+                if isinstance(block, dict):
+                    block["cache_control"] = {"type": "ephemeral"}
+                    return
 
 
 async def _household_context(db: AsyncSession, household_id) -> str:
@@ -137,20 +179,27 @@ async def _categories_context(db: AsyncSession, household_id) -> str:
     return "\n\n" + "\n\n".join(parts)
 
 
-async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -> str:
-    tools = _build_tools()
-    system_text = f"{SYSTEM_PROMPT}\n\nData odierna: {date.today().isoformat()}."
-    system_text += await _household_context(db, ctx.household_id)
-    system_text += await _categories_context(db, ctx.household_id)
+async def _build_system_blocks(db: AsyncSession, ctx: AgentContext) -> list[dict]:
+    """Costruisce il system come blocchi per il prompt caching.
+
+    - Blocco 1: SYSTEM_PROMPT statico → identico per tutti i run/nuclei, resta
+      in cache condivisa (insieme ai tool, renderizzati prima). Breakpoint qui.
+    - Blocco 2: contesto dinamico (data, addestramento del nucleo, categorie
+      note, riservatezza farmaci) → stabile entro un singolo run. Breakpoint qui
+      così le iterazioni successive del loop lo rileggono dalla cache.
+    """
+    dynamic = f"Data odierna: {date.today().isoformat()}."
+    dynamic += await _household_context(db, ctx.household_id)
+    dynamic += await _categories_context(db, ctx.household_id)
     # Riservatezza dei farmaci (dati sanitari): l'agente sa se l'interlocutore è
     # amministratore e si comporta di conseguenza.
     if ctx.is_admin:
-        system_text += (
+        dynamic += (
             "\n\nL'utente con cui stai parlando è AMMINISTRATORE del nucleo: può "
             "vedere il dettaglio dei farmaci."
         )
     else:
-        system_text += (
+        dynamic += (
             "\n\nL'utente con cui stai parlando NON è amministratore del nucleo: "
             "NON rivelare il dettaglio dei farmaci (nomi commerciali, principio "
             "attivo, codici AIC/minsan, quantità, beneficiario). Se li chiede, "
@@ -158,16 +207,51 @@ async def _run_loop(db: AsyncSession, ctx: AgentContext, messages: list[dict]) -
             "all'amministratore del nucleo. Puoi comunque rispondere su tutto il "
             "resto."
         )
+    return [
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": dynamic, "cache_control": {"type": "ephemeral"}},
+    ]
+
+
+def _log_usage(where: str, resp) -> None:
+    """Traccia l'uso dei token per capire i costi e verificare che la cache
+    funzioni (cache_read > 0). Best-effort: non deve mai far fallire il loop."""
+    try:
+        u = resp.usage
+        logger.info(
+            "AI usage [%s] in=%s out=%s cache_write=%s cache_read=%s",
+            where,
+            getattr(u, "input_tokens", None),
+            getattr(u, "output_tokens", None),
+            getattr(u, "cache_creation_input_tokens", None),
+            getattr(u, "cache_read_input_tokens", None),
+        )
+    except Exception:
+        pass
+
+
+async def _run_loop(
+    db: AsyncSession,
+    ctx: AgentContext,
+    messages: list[dict],
+    base_tools: list[dict] = TOOLS,
+    where: str = "chat",
+) -> str:
+    tools = _build_tools(base_tools)
+    system_blocks = await _build_system_blocks(db, ctx)
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
+        # Marca l'ultimo blocco utente come punto di cache prima della chiamata.
+        _mark_last_block_cacheable(messages)
         resp = await create_message(
             client,
             model=settings.anthropic_model,
             max_tokens=settings.agent_max_tokens,
-            system=system_text,
+            system=system_blocks,
             tools=tools,
             messages=messages,
         )
+        _log_usage(where, resp)
 
         tool_results: list[dict] = []
         # Blocchi file (PDF/immagine) da allegare alla risposta degli strumenti,
@@ -261,7 +345,12 @@ async def process_document(
         messages = [
             {"role": "user", "content": [file_to_content_block(document.mime_type, data), {"type": "text", "text": instruction}]}
         ]
-        summary = await _run_loop(db, ctx, messages)
+        # In elaborazione di un upload il documento è input non fidato: si espone
+        # solo il sottoinsieme di tool necessario all'estrazione/archiviazione
+        # (niente cancellazioni/aggregati), riducendo prompt injection e token.
+        summary = await _run_loop(
+            db, ctx, messages, base_tools=DOCUMENT_TOOLS, where="document"
+        )
 
         await db.refresh(document)
         document.summary = summary or document.summary
@@ -320,4 +409,4 @@ async def chat(
     )
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": message})
-    return await _run_loop(db, ctx, messages) or "Non ho una risposta."
+    return await _run_loop(db, ctx, messages, base_tools=TOOLS, where="chat") or "Non ho una risposta."

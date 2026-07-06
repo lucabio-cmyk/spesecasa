@@ -574,6 +574,31 @@ TOOLS = [
 ]
 
 
+# Sottoinsieme di strumenti esposti durante l'ELABORAZIONE DI UN UPLOAD. Il
+# documento caricato è input non fidato: limitare i tool a quelli necessari
+# all'estrazione/archiviazione riduce la superficie di prompt injection (niente
+# cancellazioni/aggregati) e alleggerisce il prompt (meno token per chiamata).
+# Gli strumenti di sola lettura/registrazione da chat (find/delete/query/record,
+# riepiloghi) non servono qui.
+DOCUMENT_TOOL_NAMES = frozenset(
+    {
+        "list_household_members",
+        "list_property_units",
+        "list_payment_methods",
+        "find_existing_document",
+        "read_document",
+        "save_document",
+        "add_expenses",
+        "save_bill",
+        "find_bills",
+        "update_bill",
+        "create_expense_category",
+    }
+)
+
+DOCUMENT_TOOLS = [t for t in TOOLS if t["name"] in DOCUMENT_TOOL_NAMES]
+
+
 # --- Dispatcher -------------------------------------------------------------
 async def dispatch(name: str, tool_input: dict, db: AsyncSession, ctx: AgentContext) -> dict:
     try:
