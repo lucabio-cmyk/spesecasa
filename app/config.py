@@ -14,6 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # (o dalle variabili PG* del servizio Postgres).
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/spese"
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", ""}
+# Segreto JWT di default: sicuro solo in sviluppo. In produzione DEVE essere
+# sovrascritto da JWT_SECRET, altrimenti chiunque può forgiare token validi.
+DEFAULT_JWT_SECRET = "cambia-questa-stringa"
 
 
 def _database_url_from_pg_env() -> str | None:
@@ -92,9 +95,25 @@ class Settings(BaseSettings):
     anthropic_retry_max_delay: float = 30.0
 
     # Auth
-    jwt_secret: str = "cambia-questa-stringa"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
+
+    # Upload documenti: dimensione massima del file accettato (MB). Protegge
+    # dalla saturazione di memoria (il file viene letto in RAM) e da costi API
+    # incontrollati su documenti giganteschi.
+    max_upload_mb: int = 20
+
+    # Rate limiting (in-memory, per processo): tetti prudenti per frenare brute
+    # force sulle credenziali e abusi/costi sugli endpoint che chiamano l'AI.
+    # `*_window` è la finestra in secondi. In deploy multi-worker il conteggio
+    # non è condiviso tra i processi: è una prima difesa, non una garanzia.
+    rate_limit_login: int = 10
+    rate_limit_login_window: int = 300
+    rate_limit_chat: int = 30
+    rate_limit_chat_window: int = 60
+    rate_limit_upload: int = 60
+    rate_limit_upload_window: int = 3600
     # Codice di recupero per reimpostare via GUI la password di un account (utile
     # se l'admin è chiuso fuori e non ha un codice fiscale). Vuoto = funzione
     # disattivata. Impostalo come variabile d'ambiente del deploy.
@@ -160,6 +179,24 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def validate_production_secrets(self) -> None:
+        """Rifiuta l'avvio in produzione con segreti di default insicuri.
+
+        Il JWT firma i token di sessione con HS256: se `JWT_SECRET` resta al
+        valore di default, chiunque lo conosce (è nel repository) può forgiare
+        token validi per qualunque utente. In sviluppo si tollera per comodità;
+        in produzione è un fail-fast, come già avviene per il database.
+        """
+        if self.app_env == "development":
+            return
+        if self.jwt_secret == DEFAULT_JWT_SECRET or not self.jwt_secret.strip():
+            raise RuntimeError(
+                "JWT_SECRET non configurato: l'applicazione sta usando il segreto "
+                "di default (presente nel codice) in ambiente "
+                f"'{self.app_env}'. Chiunque lo conosca può forgiare token di "
+                "sessione validi. Imposta JWT_SECRET a una stringa lunga e casuale."
+            )
 
 
 @lru_cache

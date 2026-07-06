@@ -1,6 +1,6 @@
 import hmac
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.config import settings
@@ -16,6 +16,7 @@ from app.schemas.auth import (
     Token,
     UserOut,
 )
+from app.services import ratelimit
 from app.services.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -70,7 +71,13 @@ async def join(body: JoinRequest, db: DB):
 
 
 @router.post("/login", response_model=Token)
-async def login(body: LoginRequest, db: DB):
+async def login(body: LoginRequest, db: DB, request: Request):
+    # Frena il brute force: conteggio per IP + email tentata.
+    await ratelimit.enforce(
+        f"login:{ratelimit.client_ip(request)}:{body.email.lower()}",
+        settings.rate_limit_login,
+        settings.rate_limit_login_window,
+    )
     res = await db.execute(select(User).where(User.email == body.email))
     user = res.scalars().first()
     # I soggetti senza accesso non hanno password: non possono autenticarsi.
@@ -82,7 +89,7 @@ async def login(body: LoginRequest, db: DB):
 
 
 @router.post("/password-reset", response_model=Token)
-async def password_reset(body: PasswordResetRequest, db: DB):
+async def password_reset(body: PasswordResetRequest, db: DB, request: Request):
     """Recupero password self-service via GUI, senza email. Verifica l'identità,
     in alternativa, con il codice fiscale dell'utente o con il codice di recupero
     del deploy (`ADMIN_RECOVERY_KEY`), poi imposta la nuova password e restituisce
@@ -90,6 +97,14 @@ async def password_reset(body: PasswordResetRequest, db: DB):
 
     Per non rivelare quali email/codici fiscali esistano, ogni fallimento
     restituisce lo stesso errore generico."""
+    # Il recupero verifica l'identità con codice fiscale o codice di recupero:
+    # fattori a bassa entropia, quindi il rate limit qui è particolarmente
+    # importante per impedire di indovinarli per tentativi.
+    await ratelimit.enforce(
+        f"pwreset:{ratelimit.client_ip(request)}:{body.email.lower()}",
+        settings.rate_limit_login,
+        settings.rate_limit_login_window,
+    )
     generic_error = HTTPException(
         status.HTTP_400_BAD_REQUEST,
         "Dati non corrispondenti o recupero non disponibile. "
