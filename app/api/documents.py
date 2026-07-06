@@ -116,13 +116,23 @@ async def upload_document(
             "(PNG/JPEG/GIF/WebP) o un foglio Excel (.xls/.xlsx).",
         )
 
-    data = await file.read()
-    # Rete di sicurezza se la dimensione non era nota a priori (streaming upload).
-    if len(data) > max_bytes:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"File troppo grande: massimo {settings.max_upload_mb} MB.",
-        )
+    # Lettura a blocchi con stop progressivo: se la dimensione non è nota a
+    # priori (upload in streaming senza Content-Length) NON carichiamo l'intero
+    # payload in memoria prima di controllarlo, evitando un possibile OOM.
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1 MB per iterazione
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"File troppo grande: massimo {settings.max_upload_mb} MB.",
+            )
+        chunks.append(chunk)
+    data = b"".join(chunks)
     digest = file_hash(data)
 
     dup = await db.execute(

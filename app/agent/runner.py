@@ -65,8 +65,13 @@ def _mark_last_block_cacheable(messages: list[dict]) -> None:
     risposta del modello sono oggetti e vengono ignorati."""
     # Rimuove eventuali marcatori precedenti così il breakpoint resta unico e
     # avanza col crescere della conversazione (max 4 breakpoint per richiesta).
+    # I messaggi con contenuto stringa (storia e turni di chat) vengono
+    # normalizzati a blocchi, altrimenti non sarebbero mai cacheabili.
     for m in messages:
         content = m.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            m["content"] = content
         if isinstance(content, list):
             for block in content:
                 if isinstance(block, dict):
