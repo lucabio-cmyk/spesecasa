@@ -582,6 +582,30 @@ async def _llm_dispatch(
     return {"ok": False, "error": "strumento sconosciuto"}
 
 
+def _mark_last_cacheable(messages: list[dict]) -> None:
+    """Sposta in avanti l'unico breakpoint di cache sui messaggi (prefix match):
+    a ogni iterazione il contesto (categorie + utilizzo) e le proposte già fatte
+    vengono riletti dalla cache invece di riprocessati a prezzo pieno. Opera solo
+    sui blocchi dict (i blocchi di risposta del modello sono oggetti, ignorati);
+    normalizza i contenuti stringa a blocco testo così diventano cacheabili."""
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            m["content"] = content
+        if isinstance(content, list):
+            for b in content:
+                if isinstance(b, dict):
+                    b.pop("cache_control", None)
+    for m in reversed(messages):
+        content = m.get("content")
+        if isinstance(content, list):
+            for b in reversed(content):
+                if isinstance(b, dict):
+                    b["cache_control"] = {"type": "ephemeral"}
+                    return
+
+
 async def _run_llm(
     db: AsyncSession, household_id: uuid.UUID, fiscal_year: int | None
 ) -> int:
@@ -606,15 +630,23 @@ async def _run_llm(
         "anomalie, usa propose_reclassification o flag_insight. Non eccedere."
     )
     messages = [{"role": "user", "content": context}]
+    # Prefisso statico (strumenti renderizzati prima + system) cacheabile: nel loop
+    # di proposte (fino a orchestrator_max_tool_iterations) evita di riprocessarlo
+    # a prezzo pieno a ogni iterazione. NB: l'orchestratore lavora solo su TESTO
+    # (categorie + utilizzo), non allega mai file/immagini dei documenti.
+    system_blocks = [
+        {"type": "text", "text": _LLM_SYSTEM, "cache_control": {"type": "ephemeral"}}
+    ]
     client = _llm_client()
     proposals = 0
     try:
         for _ in range(settings.orchestrator_max_tool_iterations):
+            _mark_last_cacheable(messages)
             resp = await create_message(
                 client,
                 model=settings.model_for_orchestrator,
                 max_tokens=settings.agent_max_tokens,
-                system=_LLM_SYSTEM,
+                system=system_blocks,
                 tools=_PROPOSAL_TOOLS,
                 messages=messages,
             )
