@@ -368,10 +368,13 @@ Vedi `.env.example`. Minime per girare: `DATABASE_URL`, `ANTHROPIC_API_KEY`,
   `ANTHROPIC_CACHE_TTL` (default `1h`) per restare caldo tra upload/chat distanti
   nel tempo, il blocco dinamico resta a 5m; verifica l'efficacia coi log
   `AI usage` (`cache_read` > 0). (2) Modello per superficie: l'estrazione
-  documenti resta su `ANTHROPIC_MODEL` (vision + fiscale), ma chat e proposte
-  dell'orchestratore possono usare un modello più economico via
-  `ANTHROPIC_MODEL_CHAT`/`ANTHROPIC_MODEL_ORCHESTRATOR` (vuoto = fallback al
-  principale; vedi `settings.model_for_chat`/`model_for_orchestrator`). (3)
+  documenti resta su `ANTHROPIC_MODEL` (vision + fiscale), mentre chat e proposte
+  dell'orchestratore girano di default su Haiku (`ANTHROPIC_MODEL_CHAT`/
+  `ANTHROPIC_MODEL_ORCHESTRATOR`, ~1/3 del costo; `""` = fallback al principale;
+  vedi `settings.model_for_chat`/`model_for_orchestrator`). È sicuro portare la
+  chat su un modello piccolo perché la riservatezza dei farmaci per i non-admin è
+  imposta a livello dati nel dispatcher (`find_expenses`/`query_expenses`
+  filtrano `SENSITIVE_CATEGORIES` via SQL), non affidata al giudizio del modello. (3)
   `WEB_SEARCH_MAX_USES` limita le ricerche web per elaborazione (ognuna ha un
   costo). NB: cambiare modello a metà conversazione invaliderebbe la cache, per
   questo la scelta è per-superficie (flussi separati), mai dentro lo stesso loop.

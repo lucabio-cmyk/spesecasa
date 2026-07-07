@@ -78,12 +78,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
     # Modello per SUPERFICIE (ottimizzazione costi): l'estrazione documenti (vision
-    # + classificazione fiscale multi-step) resta sul modello principale, ma chat
-    # e proposte dell'agente di orchestrazione possono girare su un modello più
-    # economico (es. claude-haiku-4-5, ~1/3 del costo) senza perdere qualità sui
-    # compiti più semplici. Vuoto = usa `anthropic_model` (nessun cambio di default).
-    anthropic_model_chat: str = ""
-    anthropic_model_orchestrator: str = ""
+    # + classificazione fiscale multi-step) resta sul modello principale, mentre
+    # chat e proposte dell'agente di orchestrazione girano su un modello più
+    # economico (Haiku, ~1/3 del costo). È sicuro: la riservatezza dei farmaci per
+    # i non-admin è imposta a livello dati nel dispatcher (find_expenses/
+    # query_expenses filtrano SENSITIVE_CATEGORIES via SQL), non affidata al
+    # giudizio del modello. Metti "" per ricadere sul modello principale.
+    anthropic_model_chat: str = "claude-haiku-4-5"
+    anthropic_model_orchestrator: str = "claude-haiku-4-5"
     # Durata della cache di prompt sul PREFISSO STATICO (strumenti + system prompt),
     # identico per ogni nucleo/richiesta. "1h" lo mantiene caldo tra upload/chat
     # distanti nel tempo (traffico a raffiche): la scrittura costa 2× ma la lettura
