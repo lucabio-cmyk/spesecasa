@@ -76,7 +76,17 @@ class Settings(BaseSettings):
 
     # Anthropic
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-6"
+    # Modello per l'estrazione documenti (vision + classificazione fiscale).
+    # Sonnet 5: vicino a Opus sul ragionamento, vision ad alta risoluzione (legge
+    # meglio scontrini fotografati/sbiaditi) e prezzo introduttivo ($2/$10 fino al
+    # 2026-08-31) inferiore a Sonnet 4.6 ($3/$15). Reversibile: basta rimettere
+    # `claude-sonnet-4-6`.
+    anthropic_model: str = "claude-sonnet-5"
+    # Thinking sul percorso di ESTRAZIONE (solo documenti). Su Sonnet 5 il thinking
+    # adattivo è ON di default omettendo il parametro: lo disattiviamo per tenere
+    # sotto controllo costo/latenza dell'upload (la capacità base di S5 è già > 4.6).
+    # "adaptive" per massima accuratezza fiscale a costo maggiore; "disabled" = off.
+    extraction_thinking: str = "disabled"
     # Modello per SUPERFICIE (ottimizzazione costi): l'estrazione documenti (vision
     # + classificazione fiscale multi-step) resta sul modello principale, mentre
     # chat e proposte dell'agente di orchestrazione girano su un modello più
@@ -92,7 +102,10 @@ class Settings(BaseSettings):
     # 0,1×, quindi conviene già da 3 riutilizzi nell'ora. "5m" = cache standard.
     anthropic_cache_ttl: str = "1h"
     # Budget generoso: scontrini multipagina e verifiche fiscali richiedono spazio.
-    agent_max_tokens: int = 8192
+    # Margine anche per il tokenizer di Sonnet 5 (~+30% token a parità di contenuto):
+    # evita troncamenti su estrazioni con molte righe. È un tetto, non un obiettivo:
+    # non aumenta la verbosità, si paga solo l'output effettivamente generato.
+    agent_max_tokens: int = 12000
     agent_max_tool_iterations: int = 24
     # Ricerca web dell'agente per affinare/verificare le regole fiscali aggiornate.
     # `web_search_max_uses` limita le ricerche per elaborazione: ogni ricerca ha un

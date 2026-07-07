@@ -13,7 +13,8 @@ soggetto e archivia.
 ## Stack e vincoli
 - Python 3.12, FastAPI, SQLAlchemy 2.0 **async**, Alembic, Postgres 16 + pgvector,
   Pydantic v2, Anthropic SDK.
-- Modello agente configurabile (`ANTHROPIC_MODEL`, default `claude-sonnet-4-6`).
+- Modello agente configurabile (`ANTHROPIC_MODEL`, default `claude-sonnet-5` per
+  l'estrazione; chat/orchestratore su Haiku — vedi Note → Ottimizzazione costi).
 - **Non** hardcodare soglie, percentuali o requisiti fiscali nel codice o nel
   prompt: sono variabili e vanno verificati con fonti aggiornate. Il dominio
   fiscale resta nel system prompt + revisione umana.
@@ -374,7 +375,13 @@ Vedi `.env.example`. Minime per girare: `DATABASE_URL`, `ANTHROPIC_API_KEY`,
   vedi `settings.model_for_chat`/`model_for_orchestrator`). È sicuro portare la
   chat su un modello piccolo perché la riservatezza dei farmaci per i non-admin è
   imposta a livello dati nel dispatcher (`find_expenses`/`query_expenses`
-  filtrano `SENSITIVE_CATEGORIES` via SQL), non affidata al giudizio del modello. (3)
+  filtrano `SENSITIVE_CATEGORIES` via SQL), non affidata al giudizio del modello.
+  L'estrazione documenti gira su `claude-sonnet-5` (vision alta risoluzione +
+  ragionamento vicino a Opus; prezzo introduttivo $2/$10 fino al 2026-08-31). Su
+  Sonnet 5 il thinking adattivo è ON omettendo il parametro: l'estrazione passa
+  `EXTRACTION_THINKING` (default `disabled`, `_thinking_param` in `runner.py`) per
+  controllare costo/latenza; la chat NON passa `thinking` (Haiku non ha adaptive).
+  Dopo il 2026-08-31 (fine intro pricing) rivalutare S5 vs 4.6 per l'estrazione. (3)
   `WEB_SEARCH_MAX_USES` limita le ricerche web per elaborazione (ognuna ha un
   costo). NB: cambiare modello a metà conversazione invaliderebbe la cache, per
   questo la scelta è per-superficie (flussi separati), mai dentro lo stesso loop.

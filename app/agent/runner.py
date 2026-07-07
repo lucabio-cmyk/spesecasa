@@ -66,6 +66,19 @@ def _static_cache_control() -> dict:
     return {"type": "ephemeral"}
 
 
+def _thinking_param(mode: str | None) -> dict | None:
+    """Costruisce il parametro `thinking` dalla configurazione. None = ometti il
+    parametro (lascia il default del modello). Su Sonnet 5 omettere significa
+    thinking adattivo ON: per questo l'estrazione passa esplicitamente
+    "disabled". "adaptive" è disponibile per la massima accuratezza fiscale."""
+    mode = (mode or "").strip().lower()
+    if mode == "adaptive":
+        return {"type": "adaptive"}
+    if mode in ("disabled", "off", "none"):
+        return {"type": "disabled"}
+    return None
+
+
 def _mark_last_block_cacheable(messages: list[dict]) -> None:
     """Sposta in avanti l'unico breakpoint di cache sui messaggi.
 
@@ -251,10 +264,15 @@ async def _run_loop(
     base_tools: list[dict] = TOOLS,
     where: str = "chat",
     model: str | None = None,
+    thinking: dict | None = None,
 ) -> str:
     tools = _build_tools(base_tools)
     system_blocks = await _build_system_blocks(db, ctx)
     model = model or settings.anthropic_model
+    # Il parametro thinking è opzionale: lo passiamo solo quando configurato, così
+    # sui modelli senza thinking adattivo (es. Haiku per la chat) restiamo sul loro
+    # default e non rischiamo un 400.
+    extra = {"thinking": thinking} if thinking is not None else {}
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
         # Marca l'ultimo blocco utente come punto di cache prima della chiamata.
@@ -266,6 +284,7 @@ async def _run_loop(
             system=system_blocks,
             tools=tools,
             messages=messages,
+            **extra,
         )
         _log_usage(where, resp)
 
@@ -365,7 +384,9 @@ async def process_document(
         # solo il sottoinsieme di tool necessario all'estrazione/archiviazione
         # (niente cancellazioni/aggregati), riducendo prompt injection e token.
         summary = await _run_loop(
-            db, ctx, messages, base_tools=DOCUMENT_TOOLS, where="document"
+            db, ctx, messages, base_tools=DOCUMENT_TOOLS, where="document",
+            model=settings.anthropic_model,
+            thinking=_thinking_param(settings.extraction_thinking),
         )
 
         await db.refresh(document)
