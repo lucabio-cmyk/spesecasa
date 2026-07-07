@@ -612,7 +612,7 @@ async def _run_llm(
         for _ in range(settings.orchestrator_max_tool_iterations):
             resp = await create_message(
                 client,
-                model=settings.anthropic_model,
+                model=settings.model_for_orchestrator,
                 max_tokens=settings.agent_max_tokens,
                 system=_LLM_SYSTEM,
                 tools=_PROPOSAL_TOOLS,

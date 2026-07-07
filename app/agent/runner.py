@@ -55,6 +55,17 @@ def _build_tools(base_tools: list[dict]) -> list[dict]:
     return tools
 
 
+def _static_cache_control() -> dict:
+    """cache_control per il prefisso statico (strumenti + system prompt): usa la
+    TTL configurata (default 1h) così il prefisso — identico per ogni nucleo e
+    richiesta — resta caldo anche tra upload/chat distanti nel tempo, invece di
+    essere riscritto a prezzo pieno a ogni pausa >5 minuti."""
+    ttl = (settings.anthropic_cache_ttl or "5m").strip()
+    if ttl and ttl != "5m":
+        return {"type": "ephemeral", "ttl": ttl}
+    return {"type": "ephemeral"}
+
+
 def _mark_last_block_cacheable(messages: list[dict]) -> None:
     """Sposta in avanti l'unico breakpoint di cache sui messaggi.
 
@@ -208,7 +219,10 @@ async def _build_system_blocks(db: AsyncSession, ctx: AgentContext) -> list[dict
             "resto."
         )
     return [
-        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        # Blocco statico (strumenti renderizzati prima + system prompt): cache a TTL
+        # estesa così sopravvive alle pause tra le richieste. Blocco dinamico: cache
+        # standard (5m), tanto cambia a ogni run (data/nucleo/categorie).
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": _static_cache_control()},
         {"type": "text", "text": dynamic, "cache_control": {"type": "ephemeral"}},
     ]
 
@@ -236,16 +250,18 @@ async def _run_loop(
     messages: list[dict],
     base_tools: list[dict] = TOOLS,
     where: str = "chat",
+    model: str | None = None,
 ) -> str:
     tools = _build_tools(base_tools)
     system_blocks = await _build_system_blocks(db, ctx)
+    model = model or settings.anthropic_model
     final_text = ""
     for _ in range(settings.agent_max_tool_iterations):
         # Marca l'ultimo blocco utente come punto di cache prima della chiamata.
         _mark_last_block_cacheable(messages)
         resp = await create_message(
             client,
-            model=settings.anthropic_model,
+            model=model,
             max_tokens=settings.agent_max_tokens,
             system=system_blocks,
             tools=tools,
@@ -409,4 +425,10 @@ async def chat(
     )
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": message})
-    return await _run_loop(db, ctx, messages, base_tools=TOOLS, where="chat") or "Non ho una risposta."
+    return (
+        await _run_loop(
+            db, ctx, messages, base_tools=TOOLS, where="chat",
+            model=settings.model_for_chat,
+        )
+        or "Non ho una risposta."
+    )

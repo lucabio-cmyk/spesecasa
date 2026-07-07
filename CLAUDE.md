@@ -362,3 +362,16 @@ Vedi `.env.example`. Minime per girare: `DATABASE_URL`, `ANTHROPIC_API_KEY`,
   route per non rallentare l'avvio e i test.
 - La migrazione iniziale crea l'estensione `vector` e lo schema completo: se cambi
   i modelli, genera nuove revisioni con `alembic revision --autogenerate`.
+- **Ottimizzazione costi API** (`app/config.py`, `app/agent/runner.py`): (1) il
+  prompt caching usa DUE breakpoint — il prefisso statico (strumenti + system
+  prompt, identico per ogni nucleo/richiesta) ha TTL configurabile
+  `ANTHROPIC_CACHE_TTL` (default `1h`) per restare caldo tra upload/chat distanti
+  nel tempo, il blocco dinamico resta a 5m; verifica l'efficacia coi log
+  `AI usage` (`cache_read` > 0). (2) Modello per superficie: l'estrazione
+  documenti resta su `ANTHROPIC_MODEL` (vision + fiscale), ma chat e proposte
+  dell'orchestratore possono usare un modello più economico via
+  `ANTHROPIC_MODEL_CHAT`/`ANTHROPIC_MODEL_ORCHESTRATOR` (vuoto = fallback al
+  principale; vedi `settings.model_for_chat`/`model_for_orchestrator`). (3)
+  `WEB_SEARCH_MAX_USES` limita le ricerche web per elaborazione (ognuna ha un
+  costo). NB: cambiare modello a metà conversazione invaliderebbe la cache, per
+  questo la scelta è per-superficie (flussi separati), mai dentro lo stesso loop.

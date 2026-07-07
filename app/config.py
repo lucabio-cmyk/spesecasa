@@ -77,12 +77,27 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-6"
+    # Modello per SUPERFICIE (ottimizzazione costi): l'estrazione documenti (vision
+    # + classificazione fiscale multi-step) resta sul modello principale, ma chat
+    # e proposte dell'agente di orchestrazione possono girare su un modello più
+    # economico (es. claude-haiku-4-5, ~1/3 del costo) senza perdere qualità sui
+    # compiti più semplici. Vuoto = usa `anthropic_model` (nessun cambio di default).
+    anthropic_model_chat: str = ""
+    anthropic_model_orchestrator: str = ""
+    # Durata della cache di prompt sul PREFISSO STATICO (strumenti + system prompt),
+    # identico per ogni nucleo/richiesta. "1h" lo mantiene caldo tra upload/chat
+    # distanti nel tempo (traffico a raffiche): la scrittura costa 2× ma la lettura
+    # 0,1×, quindi conviene già da 3 riutilizzi nell'ora. "5m" = cache standard.
+    anthropic_cache_ttl: str = "1h"
     # Budget generoso: scontrini multipagina e verifiche fiscali richiedono spazio.
     agent_max_tokens: int = 8192
     agent_max_tool_iterations: int = 24
     # Ricerca web dell'agente per affinare/verificare le regole fiscali aggiornate.
+    # `web_search_max_uses` limita le ricerche per elaborazione: ogni ricerca ha un
+    # costo (fee + risultati iniettati in contesto), quindi un tetto basso frena i
+    # costi sui documenti (es. farmacia) senza disattivare la funzione.
     enable_web_search: bool = True
-    web_search_max_uses: int = 6
+    web_search_max_uses: int = 3
     web_search_country: str = "IT"
     # Resilienza alle chiamate Anthropic. L'SDK ritenta già gli errori
     # transitori (429/5xx/529 overloaded), ma in caso di sovraccarico prolungato
@@ -179,6 +194,16 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def model_for_chat(self) -> str:
+        """Modello per l'agente conversazionale (fallback al modello principale)."""
+        return self.anthropic_model_chat.strip() or self.anthropic_model
+
+    @property
+    def model_for_orchestrator(self) -> str:
+        """Modello per la fase LLM dell'orchestratore (fallback al principale)."""
+        return self.anthropic_model_orchestrator.strip() or self.anthropic_model
 
     def validate_production_secrets(self) -> None:
         """Rifiuta l'avvio in produzione con segreti di default insicuri.
